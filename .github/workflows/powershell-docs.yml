@@ -1,0 +1,301 @@
+name: PowerShell Documentation Generation
+
+on:
+  workflow_call:
+    inputs:
+      module_name:
+        description: 'Name of the PowerShell module'
+        required: true
+        type: string
+      module_path:
+        description: 'Path to the PowerShell module'
+        required: true
+        type: string
+      docs_path:
+        description: 'Path where documentation should be generated'
+        required: false
+        type: string
+        default: './docs'
+      required_modules:
+        description: 'JSON array of required modules to install'
+        required: false
+        type: string
+        default: '[]'
+      stub_functions:
+        description: 'JSON array of stub functions to create for documentation generation'
+        required: false
+        type: string
+        default: '[]'
+      commit_docs:
+        description: 'Whether to commit and push generated documentation'
+        required: false
+        type: boolean
+        default: true
+      locale:
+        description: 'Locale for external help generation'
+        required: false
+        type: string
+        default: 'en-US'
+    outputs:
+      docs_generated:
+        description: 'Whether documentation was successfully generated'
+        value: ${{ jobs.generate-docs.outputs.success }}
+      docs_committed:
+        description: 'Whether documentation was committed to repository'
+        value: ${{ jobs.generate-docs.outputs.committed }}
+
+jobs:
+  generate-docs:
+    runs-on: windows-latest
+    outputs:
+      success: ${{ steps.summary.outputs.success }}
+      committed: ${{ steps.commit.outputs.committed }}
+    permissions:
+      contents: write
+      pull-requests: write
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Cache PowerShell Modules
+        id: cache-modules
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~\Documents\PowerShell\Modules
+            C:\Users\runneradmin\Documents\PowerShell\Modules
+          key: ${{ runner.os }}-pwsh-modules-${{ hashFiles(format('{0}/*.psd1', inputs.module_path)) }}
+          restore-keys: |
+            ${{ runner.os }}-pwsh-modules-
+
+      - name: Install PlatyPS
+        if: steps.cache-modules.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          Install-Module -Name PlatyPS -Force -Scope CurrentUser -AllowClobber
+
+      - name: Install Required Modules
+        if: steps.cache-modules.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          $requiredModules = '${{ inputs.required_modules }}' | ConvertFrom-Json -ErrorAction SilentlyContinue
+          
+          if ($requiredModules -and $requiredModules.Count -gt 0) {
+            Write-Host "Installing required modules..." -ForegroundColor Green
+            foreach ($module in $requiredModules) {
+              Write-Host "Installing module: $module" -ForegroundColor Cyan
+              Install-Module -Name $module -Force -Scope CurrentUser -AllowClobber
+            }
+          } else {
+            Write-Host "No additional required modules specified" -ForegroundColor Yellow
+          }
+
+      - name: Import and Setup Dependencies
+        shell: pwsh
+        run: |
+          # Import PlatyPS
+          Import-Module PlatyPS -Force
+          
+          # Import required modules
+          $requiredModules = '${{ inputs.required_modules }}' | ConvertFrom-Json -ErrorAction SilentlyContinue
+          if ($requiredModules -and $requiredModules.Count -gt 0) {
+            foreach ($module in $requiredModules) {
+              Write-Host "Importing $module..." -ForegroundColor Cyan
+              Import-Module -Name $module -Force -Verbose
+              
+              $loadedModule = Get-Module -Name $module
+              if ($loadedModule) {
+                Write-Host "$module version $($loadedModule.Version) loaded successfully" -ForegroundColor Green
+              } else {
+                throw "$module module did not load properly"
+              }
+            }
+          }
+          
+          # Create stub functions if specified
+          $stubFunctions = '${{ inputs.stub_functions }}' | ConvertFrom-Json -ErrorAction SilentlyContinue
+          if ($stubFunctions -and $stubFunctions.Count -gt 0) {
+            Write-Host "Creating stub functions for documentation generation..." -ForegroundColor Yellow
+            foreach ($stub in $stubFunctions) {
+              if (-not (Get-Command $stub.name -ErrorAction SilentlyContinue)) {
+                Write-Host "Creating stub function: $($stub.name)" -ForegroundColor Gray
+                $scriptBlock = [ScriptBlock]::Create($stub.definition)
+                New-Item -Path "function:global:$($stub.name)" -Value $scriptBlock -Force
+              }
+            }
+          }
+          
+          # Import the main module
+          Write-Host "Importing ${{ inputs.module_name }}..." -ForegroundColor Green
+          Import-Module "${{ inputs.module_path }}/${{ inputs.module_name }}.psd1" -Force -Verbose
+          
+          # Verify the module loaded
+          $mainModule = Get-Module -Name ${{ inputs.module_name }}
+          if ($mainModule) {
+            Write-Host "Successfully loaded ${{ inputs.module_name }} version: $($mainModule.Version)" -ForegroundColor Green
+            Write-Host "Exported functions count: $($mainModule.ExportedFunctions.Count)" -ForegroundColor Cyan
+          } else {
+            throw "Failed to load ${{ inputs.module_name }} module"
+          }
+
+      - name: Generate Markdown Documentation
+        shell: pwsh
+        run: |
+          # Re-import PlatyPS in this session
+          Import-Module PlatyPS -Force
+          
+          # Re-import required modules
+          $requiredModules = '${{ inputs.required_modules }}' | ConvertFrom-Json -ErrorAction SilentlyContinue
+          if ($requiredModules -and $requiredModules.Count -gt 0) {
+            foreach ($module in $requiredModules) {
+              Import-Module -Name $module -Force
+            }
+          }
+          
+          # Recreate stub functions
+          $stubFunctions = '${{ inputs.stub_functions }}' | ConvertFrom-Json -ErrorAction SilentlyContinue
+          if ($stubFunctions -and $stubFunctions.Count -gt 0) {
+            foreach ($stub in $stubFunctions) {
+              if (-not (Get-Command $stub.name -ErrorAction SilentlyContinue)) {
+                $scriptBlock = [ScriptBlock]::Create($stub.definition)
+                New-Item -Path "function:global:$($stub.name)" -Value $scriptBlock -Force
+              }
+            }
+          }
+          
+          # Re-import the main module in this session
+          Write-Host "Importing ${{ inputs.module_name }} in documentation generation session..." -ForegroundColor Green
+          Import-Module "${{ inputs.module_path }}/${{ inputs.module_name }}.psd1" -Force
+          
+          # Verify module is loaded
+          $module = Get-Module -Name ${{ inputs.module_name }}
+          if (-not $module) {
+            throw "Module ${{ inputs.module_name }} is not loaded"
+          }
+          Write-Host "Module loaded with $($module.ExportedFunctions.Count) functions" -ForegroundColor Green
+          
+          $moduleName = "${{ inputs.module_name }}"
+          $docsPath = "${{ inputs.docs_path }}"
+          
+          # Create docs directory if it doesn't exist
+          if (-not (Test-Path $docsPath)) {
+            New-Item -Path $docsPath -ItemType Directory -Force
+          }
+          
+          # Generate markdown help files
+          Write-Host "Generating markdown help files..." -ForegroundColor Green
+          New-MarkdownHelp -Module $moduleName -OutputFolder $docsPath -Force
+          
+          # Generate module page
+          Write-Host "Generating module about page..." -ForegroundColor Green
+          New-MarkdownAboutHelp -OutputFolder $docsPath -AboutName $moduleName
+
+      - name: Update Documentation
+        shell: pwsh
+        run: |
+          # Re-import PlatyPS
+          Import-Module PlatyPS -Force
+          
+          # Re-import required modules and recreate stubs
+          $requiredModules = '${{ inputs.required_modules }}' | ConvertFrom-Json -ErrorAction SilentlyContinue
+          if ($requiredModules -and $requiredModules.Count -gt 0) {
+            foreach ($module in $requiredModules) {
+              Import-Module -Name $module -Force
+            }
+          }
+          
+          $stubFunctions = '${{ inputs.stub_functions }}' | ConvertFrom-Json -ErrorAction SilentlyContinue
+          if ($stubFunctions -and $stubFunctions.Count -gt 0) {
+            foreach ($stub in $stubFunctions) {
+              if (-not (Get-Command $stub.name -ErrorAction SilentlyContinue)) {
+                $scriptBlock = [ScriptBlock]::Create($stub.definition)
+                New-Item -Path "function:global:$($stub.name)" -Value $scriptBlock -Force
+              }
+            }
+          }
+          
+          # Re-import the main module
+          Write-Host "Importing ${{ inputs.module_name }} for update step..." -ForegroundColor Green
+          Import-Module "${{ inputs.module_path }}/${{ inputs.module_name }}.psd1" -Force
+          
+          # Verify module is loaded
+          $module = Get-Module -Name ${{ inputs.module_name }}
+          if (-not $module) {
+            throw "Module ${{ inputs.module_name }} is not loaded in update step"
+          }
+          Write-Host "Module loaded with $($module.ExportedFunctions.Count) functions" -ForegroundColor Green
+          
+          $docsPath = "${{ inputs.docs_path }}"
+          $moduleName = "${{ inputs.module_name }}"
+          
+          # Update existing markdown files if they exist
+          if (Test-Path $docsPath) {
+            Write-Host "Updating markdown help module..." -ForegroundColor Green
+            Update-MarkdownHelpModule -Path $docsPath -RefreshModulePage
+          }
+
+      - name: Generate External Help
+        shell: pwsh
+        run: |
+          # Re-import PlatyPS
+          Import-Module PlatyPS -Force
+          
+          $docsPath = "${{ inputs.docs_path }}"
+          $modulePath = "${{ inputs.module_path }}"
+          $locale = "${{ inputs.locale }}"
+          
+          # Create locale directory in module
+          $helpPath = Join-Path $modulePath $locale
+          if (-not (Test-Path $helpPath)) {
+            New-Item -Path $helpPath -ItemType Directory -Force
+          }
+          
+          # Generate external help XML file
+          Write-Host "Generating external help XML files..." -ForegroundColor Green
+          New-ExternalHelp -Path $docsPath -OutputPath $helpPath -Force
+          Write-Host "✅ External help generated at: $helpPath" -ForegroundColor Green
+
+      - name: Commit and Push Documentation
+        id: commit
+        if: inputs.commit_docs == true
+        shell: pwsh
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          
+          # Add documentation files
+          git add "${{ inputs.docs_path }}/"
+          git add "${{ inputs.module_path }}/${{ inputs.locale }}/"
+          
+          # Check if there are changes to commit
+          $changes = git status --porcelain
+          if ($changes) {
+            git commit -m "docs: Auto-generate PowerShell documentation [skip ci]"
+            git push
+            Write-Host "✅ Documentation committed and pushed" -ForegroundColor Green
+            echo "committed=true" >> $env:GITHUB_OUTPUT
+          } else {
+            Write-Host "No documentation changes to commit" -ForegroundColor Yellow
+            echo "committed=false" >> $env:GITHUB_OUTPUT
+          }
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Documentation Summary
+        id: summary
+        if: always()
+        shell: pwsh
+        run: |
+          $jobStatus = '${{ job.status }}'
+          Write-Host "`n=== Documentation Generation Complete ===" -ForegroundColor Cyan
+          if ($jobStatus -eq 'success') {
+            Write-Host "✅ Documentation generated successfully!" -ForegroundColor Green
+            echo "success=true" >> $env:GITHUB_OUTPUT
+          } else {
+            Write-Host "❌ Documentation generation failed." -ForegroundColor Red
+            echo "success=false" >> $env:GITHUB_OUTPUT
+          }

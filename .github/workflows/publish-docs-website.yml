@@ -1,0 +1,304 @@
+name: Publish Documentation to Website
+
+on:
+  workflow_call:
+    inputs:
+      docs_path:
+        description: 'Path to the documentation files'
+        required: false
+        type: string
+        default: './docs'
+      website_api_endpoint:
+        description: 'API endpoint for documentation publishing'
+        required: true
+        type: string
+      docs_format:
+        description: 'Format of documentation files (markdown, html, json)'
+        required: false
+        type: string
+        default: 'markdown'
+      module_name:
+        description: 'Name of the module (for organization on website)'
+        required: false
+        type: string
+      docs_version:
+        description: 'Version of the documentation'
+        required: false
+        type: string
+      publish_method:
+        description: 'Method to publish docs (api, git, ftp)'
+        required: false
+        type: string
+        default: 'api'
+      dry_run:
+        description: 'Perform a dry run without actually publishing'
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      WEBSITE_API_KEY:
+        description: 'API key for website documentation publishing'
+        required: true
+      WEBSITE_AUTH_TOKEN:
+        description: 'Optional additional authentication token'
+        required: false
+    outputs:
+      published:
+        description: 'Whether documentation was successfully published'
+        value: ${{ jobs.publish-docs.outputs.published }}
+      docs_url:
+        description: 'URL where documentation was published'
+        value: ${{ jobs.publish-docs.outputs.docs_url }}
+
+jobs:
+  publish-docs:
+    name: Publish Documentation to Website
+    runs-on: ubuntu-latest
+    outputs:
+      published: ${{ steps.publish.outputs.published }}
+      docs_url: ${{ steps.publish.outputs.docs_url }}
+    
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v4
+
+    - name: Validate Documentation Path
+      id: validate
+      shell: bash
+      run: |
+        DOCS_PATH="${{ inputs.docs_path }}"
+        
+        echo "Checking documentation path: $DOCS_PATH"
+        
+        if [ ! -d "$DOCS_PATH" ]; then
+          echo "❌ Documentation path does not exist: $DOCS_PATH"
+          exit 1
+        fi
+        
+        # Count documentation files
+        if [ "${{ inputs.docs_format }}" = "markdown" ]; then
+          DOC_COUNT=$(find "$DOCS_PATH" -name "*.md" | wc -l)
+          FILE_PATTERN="*.md"
+        elif [ "${{ inputs.docs_format }}" = "html" ]; then
+          DOC_COUNT=$(find "$DOCS_PATH" -name "*.html" | wc -l)
+          FILE_PATTERN="*.html"
+        elif [ "${{ inputs.docs_format }}" = "json" ]; then
+          DOC_COUNT=$(find "$DOCS_PATH" -name "*.json" | wc -l)
+          FILE_PATTERN="*.json"
+        else
+          DOC_COUNT=$(find "$DOCS_PATH" -type f | wc -l)
+          FILE_PATTERN="*"
+        fi
+        
+        echo "Found $DOC_COUNT documentation files ($FILE_PATTERN)"
+        
+        if [ $DOC_COUNT -eq 0 ]; then
+          echo "❌ No documentation files found in $DOCS_PATH"
+          exit 1
+        fi
+        
+        echo "✅ Documentation validation passed"
+        echo "doc_count=$DOC_COUNT" >> $GITHUB_OUTPUT
+
+    - name: Prepare Documentation Package
+      id: prepare
+      shell: bash
+      run: |
+        echo "Preparing documentation package..."
+        
+        DOCS_PATH="${{ inputs.docs_path }}"
+        PACKAGE_DIR="docs-package"
+        
+        # Create package directory
+        mkdir -p "$PACKAGE_DIR"
+        
+        # Copy documentation files
+        cp -r "$DOCS_PATH"/* "$PACKAGE_DIR/"
+        
+        # Create metadata file
+        cat > "$PACKAGE_DIR/metadata.json" << EOF
+        {
+          "module_name": "${{ inputs.module_name }}",
+          "docs_version": "${{ inputs.docs_version }}",
+          "docs_format": "${{ inputs.docs_format }}",
+          "publish_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+          "repository": "${{ github.repository }}",
+          "commit_sha": "${{ github.sha }}",
+          "workflow_run_id": "${{ github.run_id }}"
+        }
+        EOF
+        
+        # Create file inventory
+        echo "Creating file inventory..."
+        find "$PACKAGE_DIR" -type f -name "*.${{ inputs.docs_format }}" > "$PACKAGE_DIR/file_inventory.txt" || \
+        find "$PACKAGE_DIR" -type f > "$PACKAGE_DIR/file_inventory.txt"
+        
+        echo "✅ Documentation package prepared"
+        echo "package_dir=$PACKAGE_DIR" >> $GITHUB_OUTPUT
+
+    - name: Publish via API
+      id: publish
+      if: inputs.publish_method == 'api'
+      shell: bash
+      run: |
+        echo "Publishing documentation via API..."
+        
+        API_ENDPOINT="${{ inputs.website_api_endpoint }}"
+        API_KEY="${{ secrets.WEBSITE_API_KEY }}"
+        AUTH_TOKEN="${{ secrets.WEBSITE_AUTH_TOKEN }}"
+        PACKAGE_DIR="${{ steps.prepare.outputs.package_dir }}"
+        DRY_RUN="${{ inputs.dry_run }}"
+        
+        if [ -z "$API_KEY" ]; then
+          echo "❌ WEBSITE_API_KEY secret is required"
+          exit 1
+        fi
+        
+        if [ -z "$API_ENDPOINT" ]; then
+          echo "❌ website_api_endpoint input is required"
+          exit 1
+        fi
+        
+        # Prepare headers
+        HEADERS="-H 'Content-Type: application/json' -H 'X-API-Key: $API_KEY'"
+        
+        if [ -n "$AUTH_TOKEN" ]; then
+          HEADERS="$HEADERS -H 'Authorization: Bearer $AUTH_TOKEN'"
+        fi
+        
+        if [ "$DRY_RUN" = "true" ]; then
+          HEADERS="$HEADERS -H 'X-Dry-Run: true'"
+          echo "🔍 Performing dry run - no actual publishing will occur"
+        fi
+        
+        # TODO: Customize this section based on your API requirements
+        # This is a scaffolded example - modify according to your API specification
+        
+        echo "Preparing API payload..."
+        
+        # Create a simple payload structure (customize as needed)
+        PAYLOAD=$(cat << EOF
+        {
+          "module_name": "${{ inputs.module_name }}",
+          "docs_version": "${{ inputs.docs_version }}",
+          "docs_format": "${{ inputs.docs_format }}",
+          "repository": "${{ github.repository }}",
+          "commit_sha": "${{ github.sha }}",
+          "files": []
+        }
+        EOF
+        )
+        
+        # Add files to payload (this is a simplified approach)
+        # In a real scenario, you might need to:
+        # 1. Base64 encode files
+        # 2. Upload files to a separate endpoint first
+        # 3. Send file references instead of content
+        # 4. Use multipart/form-data instead of JSON
+        
+        echo "Sending documentation to API endpoint..."
+        
+        # Example API call (customize based on your API)
+        RESPONSE=$(curl -s -w "\n%{http_code}" \
+          -X POST \
+          $HEADERS \
+          -d "$PAYLOAD" \
+          "$API_ENDPOINT" 2>&1)
+        
+        # Extract HTTP status code (last line) and response body
+        HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+        RESPONSE_BODY=$(echo "$RESPONSE" | sed '$d')
+        
+        echo "HTTP Status Code: $HTTP_CODE"
+        echo "Response: $RESPONSE_BODY"
+        
+        if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
+          echo "✅ Documentation published successfully"
+          
+          # Try to extract documentation URL from response (customize as needed)
+          DOCS_URL=$(echo "$RESPONSE_BODY" | grep -o '"url":"[^"]*"' | cut -d'"' -f4 || echo "")
+          
+          if [ -z "$DOCS_URL" ]; then
+            # Fallback URL construction (customize as needed)
+            DOCS_URL="${API_ENDPOINT%/api/*}/docs/${{ inputs.module_name }}"
+          fi
+          
+          echo "published=true" >> $GITHUB_OUTPUT
+          echo "docs_url=$DOCS_URL" >> $GITHUB_OUTPUT
+          
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "🔍 Dry run completed successfully"
+          else {
+            echo "📖 Documentation available at: $DOCS_URL"
+          fi
+        else
+          echo "❌ API request failed with status $HTTP_CODE"
+          echo "Response: $RESPONSE_BODY"
+          echo "published=false" >> $GITHUB_OUTPUT
+          exit 1
+        fi
+
+    - name: Publish via Git (Alternative Method)
+      id: publish_git
+      if: inputs.publish_method == 'git'
+      shell: bash
+      run: |
+        echo "🚧 Git publishing method not yet implemented"
+        echo "This would typically:"
+        echo "1. Clone a documentation repository"
+        echo "2. Update documentation files"
+        echo "3. Commit and push changes"
+        echo "4. Trigger website rebuild"
+        
+        # Placeholder for git-based publishing
+        echo "published=false" >> $GITHUB_OUTPUT
+        echo "This publishing method is not yet implemented" >> $GITHUB_OUTPUT
+
+    - name: Publish via FTP (Alternative Method)
+      id: publish_ftp
+      if: inputs.publish_method == 'ftp'
+      shell: bash
+      run: |
+        echo "🚧 FTP publishing method not yet implemented"
+        echo "This would typically:"
+        echo "1. Connect to FTP server"
+        echo "2. Upload documentation files"
+        echo "3. Update website index"
+        
+        # Placeholder for FTP-based publishing
+        echo "published=false" >> $GITHUB_OUTPUT
+        echo "This publishing method is not yet implemented" >> $GITHUB_OUTPUT
+
+    - name: Cleanup
+      if: always()
+      shell: bash
+      run: |
+        # Clean up temporary files
+        PACKAGE_DIR="${{ steps.prepare.outputs.package_dir }}"
+        if [ -d "$PACKAGE_DIR" ]; then
+          rm -rf "$PACKAGE_DIR"
+          echo "✅ Cleaned up temporary package directory"
+        fi
+
+    - name: Publication Summary
+      if: always()
+      shell: bash
+      run: |
+        echo "=== Documentation Publication Summary ===" 
+        echo "📄 Module: ${{ inputs.module_name }}"
+        echo "📄 Version: ${{ inputs.docs_version }}"
+        echo "📄 Format: ${{ inputs.docs_format }}"
+        echo "📄 Method: ${{ inputs.publish_method }}"
+        echo "📄 Files Found: ${{ steps.validate.outputs.doc_count }}"
+        
+        PUBLISHED="${{ steps.publish.outputs.published }}${{ steps.publish_git.outputs.published }}${{ steps.publish_ftp.outputs.published }}"
+        DOCS_URL="${{ steps.publish.outputs.docs_url }}${{ steps.publish_git.outputs.docs_url }}${{ steps.publish_ftp.outputs.docs_url }}"
+        
+        if [ "$PUBLISHED" = "true" ]; then
+          echo "✅ Status: Published successfully"
+          if [ -n "$DOCS_URL" ]; then
+            echo "🔗 URL: $DOCS_URL"
+          fi
+        else
+          echo "❌ Status: Publication failed or not attempted"
+        fi
