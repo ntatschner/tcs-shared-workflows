@@ -151,7 +151,8 @@ jobs:
           Write-Host 'Testing module import and exported functions...' -ForegroundColor Green
 
           try {
-            Import-Module $env:MODULE_MANIFEST -Force -ErrorAction Stop
+            $resolvedManifestPath = Resolve-Path -Path $env:MODULE_MANIFEST -ErrorAction Stop
+            Import-Module -Name $resolvedManifestPath -Force -ErrorAction Stop
             Write-Host "✅ Module '$env:MODULE_NAME' imported successfully." -ForegroundColor Green
 
             $module = Get-Module $env:MODULE_NAME

@@ -136,7 +136,8 @@ jobs:
           MODULE_NAME: ${{ env.MODULE_NAME }}
         run: |
           Import-Module PlatyPS -Force
-          Import-Module $env:MODULE_MANIFEST -Force -Verbose
+          $resolvedManifestPath = Resolve-Path -Path $env:MODULE_MANIFEST -ErrorAction Stop
+          Import-Module -Name $resolvedManifestPath -Force -Verbose
 
           $module = Get-Module $env:MODULE_NAME
           if (-not $module) {
@@ -154,7 +155,8 @@ jobs:
           DOCS_PATH: ${{ env.DOCS_PATH }}
         run: |
           Import-Module PlatyPS -Force
-          Import-Module $env:MODULE_MANIFEST -Force
+          $resolvedManifestPath = Resolve-Path -Path $env:MODULE_MANIFEST -ErrorAction Stop
+          Import-Module -Name $resolvedManifestPath -Force
 
           if (-not (Test-Path $env:DOCS_PATH)) {
             New-Item -Path $env:DOCS_PATH -ItemType Directory -Force | Out-Null

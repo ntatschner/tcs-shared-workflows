@@ -130,7 +130,8 @@ jobs:
           MODULE_NAME: ${{ env.MODULE_NAME }}
         run: |
           try {
-            Import-Module $env:MODULE_MANIFEST -Force -ErrorAction Stop
+            $resolvedManifestPath = Resolve-Path -Path $env:MODULE_MANIFEST -ErrorAction Stop
+            Import-Module -Name $resolvedManifestPath -Force -ErrorAction Stop
             Write-Host "✅ Module '$env:MODULE_NAME' imports successfully." -ForegroundColor Green
             $module = Get-Module $env:MODULE_NAME
             Write-Host "Exports: $($module.ExportedFunctions.Keys -join ', ')" -ForegroundColor Cyan
