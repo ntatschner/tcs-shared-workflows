@@ -1,0 +1,228 @@
+name: PowerShell Module Validation
+
+on:
+  workflow_call:
+    inputs:
+      module-name:
+        description: 'Name of the PowerShell module to validate.'
+        required: true
+        type: string
+      module-path:
+        description: 'Relative path to the module directory (contains the manifest and module files).'
+        required: true
+        type: string
+      module-manifest:
+        description: 'Optional explicit path to the module manifest (.psd1). Defaults to <module-path>/<module-name>.psd1 when omitted.'
+        required: false
+        type: string
+      script-analyzer-severity:
+        description: 'Comma-separated list of severities to include when running PSScriptAnalyzer.'
+        required: false
+        type: string
+        default: 'Information,Warning,Error'
+      install-modules:
+        description: 'Optional newline-separated list of additional modules to install before validation.'
+        required: false
+        type: string
+      smoke-test-script-path:
+        description: 'Optional path (relative to the repository root) to a PowerShell script that performs additional smoke tests.'
+        required: false
+        type: string
+
+jobs:
+  validate:
+    name: Validate PowerShell Module
+    runs-on: windows-latest
+    env:
+      MODULE_NAME: ${{ inputs.module-name }}
+      MODULE_PATH: ${{ inputs.module-path }}
+      MODULE_MANIFEST: ${{ inputs.module-manifest != '' && inputs.module-manifest || format('{0}/{1}.psd1', inputs.module-path, inputs.module-name) }}
+      ANALYZER_SEVERITY: ${{ inputs.script-analyzer-severity }}
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup PowerShell Environment
+        shell: pwsh
+        run: |
+          Write-Host 'Installing required PowerShell tooling...' -ForegroundColor Green
+          Install-Module -Name PowerShellGet -Force -AllowClobber -Scope CurrentUser
+          Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser
+
+      - name: Install Additional Modules
+        if: inputs.install-modules != ''
+        shell: pwsh
+        env:
+          MODULE_LIST: ${{ inputs.install-modules }}
+        run: |
+          $modules = $env:MODULE_LIST -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+          if (-not $modules) {
+            Write-Host 'No additional modules supplied after trimming input.' -ForegroundColor Yellow
+            return
+          }
+          foreach ($moduleName in $modules) {
+            Write-Host "Installing module: $moduleName" -ForegroundColor Cyan
+            Install-Module -Name $moduleName -Force -Scope CurrentUser -AllowClobber
+          }
+
+      - name: Verify Module Manifest
+        shell: pwsh
+        env:
+          MODULE_MANIFEST: ${{ env.MODULE_MANIFEST }}
+        run: |
+          Write-Host 'Validating module manifest...' -ForegroundColor Green
+          if (-not (Test-Path $env:MODULE_MANIFEST)) {
+            throw "Module manifest not found at path: $env:MODULE_MANIFEST"
+          }
+
+          try {
+            $manifest = Test-ModuleManifest -Path $env:MODULE_MANIFEST -ErrorAction Stop
+            Write-Host "✅ Module manifest is valid" -ForegroundColor Green
+            Write-Host "Module: $($manifest.Name)" -ForegroundColor Cyan
+            Write-Host "Version: $($manifest.Version)" -ForegroundColor Cyan
+            Write-Host "Author: $($manifest.Author)" -ForegroundColor Cyan
+
+            $requiredFields = @('Version','Description','Author')
+            foreach ($field in $requiredFields) {
+              $value = $manifest.$field
+              if (-not $value -or [string]::IsNullOrWhiteSpace("$value")) {
+                throw "Required manifest field '$field' is missing or empty."
+              }
+            }
+            Write-Host '✅ All required PowerShell Gallery manifest fields are populated.' -ForegroundColor Green
+          }
+          catch {
+            Write-Error "❌ Module manifest validation failed: $_"
+            throw
+          }
+
+      - name: Run PSScriptAnalyzer
+        shell: pwsh
+        env:
+          MODULE_PATH: ${{ env.MODULE_PATH }}
+          ANALYZER_SEVERITY: ${{ env.ANALYZER_SEVERITY }}
+        run: |
+          Write-Host 'Running PSScriptAnalyzer...' -ForegroundColor Green
+          $severityLevels = $env:ANALYZER_SEVERITY -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+          if (-not $severityLevels) {
+            $severityLevels = 'Information','Warning','Error'
+          }
+
+          $results = Invoke-ScriptAnalyzer -Path $env:MODULE_PATH -Recurse -Severity $severityLevels
+
+          if ($results) {
+            Write-Host 'PSScriptAnalyzer findings:' -ForegroundColor Yellow
+            $errors = $results | Where-Object Severity -eq 'Error'
+            $warnings = $results | Where-Object Severity -eq 'Warning'
+            $information = $results | Where-Object Severity -eq 'Information'
+
+            if ($errors) {
+              Write-Host "`n❌ ERRORS ($($errors.Count)):" -ForegroundColor Red
+              $errors | Format-Table ScriptName, Line, Column, RuleName, Message -Wrap
+            }
+
+            if ($warnings) {
+              Write-Host "`n⚠️ WARNINGS ($($warnings.Count)):" -ForegroundColor Yellow
+              $warnings | Format-Table ScriptName, Line, Column, RuleName, Message -Wrap
+            }
+
+            if ($information) {
+              Write-Host "`nℹ️ INFORMATION ($($information.Count)):" -ForegroundColor Cyan
+              $information | Format-Table ScriptName, Line, Column, RuleName, Message -Wrap
+            }
+
+            Write-Host "`nSummary: $($errors.Count) error(s), $($warnings.Count) warning(s), $($information.Count) informational" -ForegroundColor White
+
+            if ($errors.Count -gt 0) {
+              throw "PSScriptAnalyzer discovered $($errors.Count) error(s)."
+            }
+          }
+          else {
+            Write-Host '✅ No PSScriptAnalyzer issues detected.' -ForegroundColor Green
+          }
+
+      - name: Import Module and Inspect Exports
+        shell: pwsh
+        env:
+          MODULE_MANIFEST: ${{ env.MODULE_MANIFEST }}
+          MODULE_NAME: ${{ env.MODULE_NAME }}
+        run: |
+          Write-Host 'Testing module import and exported functions...' -ForegroundColor Green
+
+          try {
+            Import-Module $env:MODULE_MANIFEST -Force -ErrorAction Stop
+            Write-Host "✅ Module '$env:MODULE_NAME' imported successfully." -ForegroundColor Green
+
+            $module = Get-Module $env:MODULE_NAME
+            if (-not $module) {
+              throw "Module '$env:MODULE_NAME' did not remain loaded after import."
+            }
+
+            $exportedFunctions = $module.ExportedFunctions
+            if (-not $exportedFunctions -or $exportedFunctions.Count -eq 0) {
+              Write-Warning '⚠️ Module does not export any functions.'
+            }
+            else {
+              Write-Host "Exported functions ($($exportedFunctions.Count)):" -ForegroundColor Cyan
+              $exportedFunctions.Keys | Sort-Object | ForEach-Object { Write-Host "  - $_" -ForegroundColor Gray }
+
+              Write-Host "`nChecking for help documentation..." -ForegroundColor Green
+              $functionsWithoutHelp = @()
+              foreach ($functionName in $exportedFunctions.Keys) {
+                $help = Get-Help $functionName -ErrorAction SilentlyContinue
+                if (-not $help -or [string]::IsNullOrWhiteSpace($help.Synopsis)) {
+                  $functionsWithoutHelp += $functionName
+                }
+              }
+
+              if ($functionsWithoutHelp.Count -gt 0) {
+                Write-Warning '⚠️ Functions missing help documentation:'
+                $functionsWithoutHelp | ForEach-Object { Write-Host "  - $_" -ForegroundColor Yellow }
+              }
+              else {
+                Write-Host '✅ All exported functions have discoverable help documentation.' -ForegroundColor Green
+              }
+            }
+          }
+          catch {
+            Write-Error "❌ Module import or inspection failed: $_"
+            throw
+          }
+          finally {
+            Remove-Module $env:MODULE_NAME -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Execute Smoke Tests
+        if: inputs.smoke-test-script-path != ''
+        shell: pwsh
+        env:
+          SCRIPT_PATH: ${{ inputs.smoke-test-script-path }}
+        run: |
+          $resolvedPath = Join-Path (Get-Location) $env:SCRIPT_PATH
+          if (-not (Test-Path $resolvedPath)) {
+            throw "Smoke test script not found at path: $resolvedPath"
+          }
+
+          Write-Host "Running smoke test script at '$resolvedPath'..." -ForegroundColor Green
+          try {
+            & $resolvedPath
+            Write-Host '✅ Smoke tests completed successfully.' -ForegroundColor Green
+          }
+          catch {
+            Write-Error "❌ Smoke tests failed: $_"
+            throw
+          }
+
+      - name: Validation Summary
+        if: always()
+        shell: pwsh
+        run: |
+          $jobStatus = '${{ job.status }}'
+          Write-Host "`n=== Validation Complete ===" -ForegroundColor Cyan
+          if ($jobStatus -eq 'success') {
+            Write-Host '✅ All validation checks passed.' -ForegroundColor Green
+          }
+          else {
+            Write-Host '❌ One or more validation checks failed. Review the log output above for details.' -ForegroundColor Red
+          }

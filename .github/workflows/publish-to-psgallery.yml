@@ -1,0 +1,307 @@
+name: Publish PowerShell Module to PSGallery
+
+on:
+  workflow_call:
+    inputs:
+      module-name:
+        description: 'Name of the PowerShell module being published.'
+        required: true
+        type: string
+      module-path:
+        description: 'Relative path to the module directory (containing the manifest and module folder).'
+        required: true
+        type: string
+      module-manifest:
+        description: 'Optional explicit path to the module manifest (.psd1). Defaults to <module-path>/<module-name>.psd1 when omitted.'
+        required: false
+        type: string
+      force-publish:
+        description: 'Set to true to publish even if the version already exists in the gallery.'
+        required: false
+        type: boolean
+        default: false
+      create-release:
+        description: 'Set to false to skip creating a GitHub release after publishing.'
+        required: false
+        type: boolean
+        default: true
+      run-validation:
+        description: 'Set to false to skip linting and import validation (not recommended).'
+        required: false
+        type: boolean
+        default: true
+    secrets:
+      psgallery-api-key:
+        description: 'API key for the PowerShell Gallery.'
+        required: true
+      repo-token:
+        description: 'Optional token with contents: write permissions. Defaults to the calling workflow GITHUB_TOKEN when omitted.'
+        required: false
+
+jobs:
+  validate:
+    name: Validate Module
+    runs-on: windows-latest
+    env:
+      MODULE_NAME: ${{ inputs.module-name }}
+      MODULE_PATH: ${{ inputs.module-path }}
+      MODULE_MANIFEST: ${{ inputs.module-manifest != '' && inputs.module-manifest || format('{0}/{1}.psd1', inputs.module-path, inputs.module-name) }}
+      FORCE_PUBLISH: ${{ inputs.force-publish }}
+      RUN_VALIDATION: ${{ inputs.run-validation }}
+    outputs:
+      module_version: ${{ steps.get-version.outputs.module_version }}
+      should_publish: ${{ steps.check-version.outputs.should_publish }}
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup PowerShell Environment
+        if: env.RUN_VALIDATION == 'true'
+        shell: pwsh
+        run: |
+          Install-Module -Name PowerShellGet -Force -AllowClobber -Scope CurrentUser
+          Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser
+          Install-Module -Name Microsoft.PowerShell.PSResourceGet -Force -AllowClobber -Scope CurrentUser
+
+      - name: Test Module Manifest
+        if: env.RUN_VALIDATION == 'true'
+        shell: pwsh
+        env:
+          MODULE_MANIFEST: ${{ env.MODULE_MANIFEST }}
+        run: |
+          if (-not (Test-Path $env:MODULE_MANIFEST)) {
+            throw "Module manifest not found at path: $env:MODULE_MANIFEST"
+          }
+
+          $manifest = Test-ModuleManifest -Path $env:MODULE_MANIFEST -ErrorAction Stop
+          Write-Host "✅ Manifest for $($manifest.Name) v$($manifest.Version) is valid." -ForegroundColor Green
+
+      - name: Determine Module Version
+        id: get-version
+        shell: pwsh
+        env:
+          MODULE_MANIFEST: ${{ env.MODULE_MANIFEST }}
+        run: |
+          if (-not (Test-Path $env:MODULE_MANIFEST)) {
+            throw "Module manifest not found at path: $env:MODULE_MANIFEST"
+          }
+
+          $manifest = Import-PowerShellDataFile -Path $env:MODULE_MANIFEST
+          $version = $manifest.ModuleVersion
+          if (-not $version) {
+            throw 'ModuleVersion field is missing from the manifest.'
+          }
+
+          Write-Host "Module version detected: $version" -ForegroundColor Green
+          "module_version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Run PSScriptAnalyzer
+        if: env.RUN_VALIDATION == 'true'
+        shell: pwsh
+        env:
+          MODULE_PATH: ${{ env.MODULE_PATH }}
+        run: |
+          $results = Invoke-ScriptAnalyzer -Path $env:MODULE_PATH -Recurse -Severity Warning,Error
+          if ($results) {
+            Write-Host 'PSScriptAnalyzer findings:' -ForegroundColor Yellow
+            $errors = $results | Where-Object Severity -eq 'Error'
+            $warnings = $results | Where-Object Severity -eq 'Warning'
+
+            if ($errors.Count -gt 0) {
+              $errors | Format-Table ScriptName, Line, Column, RuleName, Message -Wrap
+              throw "PSScriptAnalyzer found $($errors.Count) error(s)."
+            }
+
+            if ($warnings) {
+              Write-Host 'Warnings detected:' -ForegroundColor Yellow
+              $warnings | Format-Table ScriptName, Line, Column, RuleName, Message -Wrap
+            }
+          }
+          else {
+            Write-Host '✅ No PSScriptAnalyzer warnings or errors detected.' -ForegroundColor Green
+          }
+
+      - name: Test Module Import
+        if: env.RUN_VALIDATION == 'true'
+        shell: pwsh
+        env:
+          MODULE_MANIFEST: ${{ env.MODULE_MANIFEST }}
+          MODULE_NAME: ${{ env.MODULE_NAME }}
+        run: |
+          try {
+            Import-Module $env:MODULE_MANIFEST -Force -ErrorAction Stop
+            Write-Host "✅ Module '$env:MODULE_NAME' imports successfully." -ForegroundColor Green
+            $module = Get-Module $env:MODULE_NAME
+            Write-Host "Exports: $($module.ExportedFunctions.Keys -join ', ')" -ForegroundColor Cyan
+          }
+          finally {
+            Remove-Module $env:MODULE_NAME -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Check PowerShell Gallery Version
+        id: check-version
+        shell: pwsh
+        env:
+          MODULE_NAME: ${{ env.MODULE_NAME }}
+          MODULE_VERSION: ${{ steps.get-version.outputs.module_version }}
+          FORCE_PUBLISH: ${{ env.FORCE_PUBLISH }}
+        run: |
+          $forcePublish = [System.Convert]::ToBoolean($env:FORCE_PUBLISH)
+          $existingModule = $null
+
+          if (Get-Command Find-PSResource -ErrorAction SilentlyContinue) {
+            $existingModule = Find-PSResource -Name $env:MODULE_NAME -Version $env:MODULE_VERSION -ErrorAction SilentlyContinue
+          }
+          elseif (Get-Command Find-Module -ErrorAction SilentlyContinue) {
+            $existingModule = Find-Module -Name $env:MODULE_NAME -RequiredVersion $env:MODULE_VERSION -ErrorAction SilentlyContinue
+          }
+
+          if ($existingModule -and -not $forcePublish) {
+            Write-Host "Version $($env:MODULE_VERSION) already exists in PSGallery." -ForegroundColor Yellow
+            "should_publish=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          }
+          else {
+            if ($existingModule -and $forcePublish) {
+              Write-Host "Force publish enabled. Proceeding even though version exists." -ForegroundColor Yellow
+            }
+            else {
+              Write-Host "Version $($env:MODULE_VERSION) is new. Proceeding with publish." -ForegroundColor Green
+            }
+            "should_publish=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          }
+
+  publish:
+    name: Publish Module
+    runs-on: windows-latest
+    needs: validate
+    if: needs.validate.outputs.should_publish == 'true'
+    permissions:
+      contents: write
+    env:
+      MODULE_NAME: ${{ inputs.module-name }}
+      MODULE_PATH: ${{ inputs.module-path }}
+      MODULE_MANIFEST: ${{ inputs.module-manifest != '' && inputs.module-manifest || format('{0}/{1}.psd1', inputs.module-path, inputs.module-name) }}
+      MODULE_VERSION: ${{ needs.validate.outputs.module_version }}
+      PSGALLERY_API_KEY: ${{ secrets.psgallery-api-key }}
+      REPO_TOKEN: ${{ secrets.repo-token != '' && secrets.repo-token || secrets.GITHUB_TOKEN }}
+      CREATE_RELEASE: ${{ inputs.create-release }}
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ env.REPO_TOKEN }}
+
+      - name: Setup PowerShell Environment
+        shell: pwsh
+        run: |
+          Install-Module -Name PowerShellGet -Force -AllowClobber -Scope CurrentUser -ErrorAction SilentlyContinue
+          Install-Module -Name Microsoft.PowerShell.PSResourceGet -Force -AllowClobber -Scope CurrentUser -ErrorAction SilentlyContinue
+
+      - name: Publish Module to PSGallery
+        shell: pwsh
+        env:
+          MODULE_PATH: ${{ env.MODULE_PATH }}
+          MODULE_MANIFEST: ${{ env.MODULE_MANIFEST }}
+          PSGALLERY_API_KEY: ${{ env.PSGALLERY_API_KEY }}
+        run: |
+          if (-not $env:PSGALLERY_API_KEY) {
+            throw 'PowerShell Gallery API key was not provided.'
+          }
+
+          $published = $false
+
+          if (Get-Command Publish-PSResource -ErrorAction SilentlyContinue) {
+            Write-Host 'Attempting publish with Publish-PSResource...' -ForegroundColor Cyan
+            try {
+              $repo = Get-PSResourceRepository -Name PSGallery -ErrorAction SilentlyContinue
+              if (-not $repo) {
+                Register-PSResourceRepository -PSGallery -Trusted
+              }
+
+              Publish-PSResource -Path $env:MODULE_PATH -ApiKey $env:PSGALLERY_API_KEY -Repository PSGallery -Verbose
+              $published = $true
+              Write-Host '✅ Published using Publish-PSResource.' -ForegroundColor Green
+            }
+            catch {
+              Write-Warning "Publish-PSResource failed: $_"
+            }
+          }
+
+          if (-not $published -and (Get-Command Publish-Module -ErrorAction SilentlyContinue)) {
+            Write-Host 'Falling back to Publish-Module...' -ForegroundColor Cyan
+            try {
+              Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction SilentlyContinue
+              Publish-Module -Path $env:MODULE_PATH -NuGetApiKey $env:PSGALLERY_API_KEY -Repository PSGallery -Verbose
+              $published = $true
+              Write-Host '✅ Published using Publish-Module.' -ForegroundColor Green
+            }
+            catch {
+              Write-Warning "Publish-Module failed: $_"
+            }
+          }
+
+          if (-not $published) {
+            throw 'All publish attempts failed. No module was uploaded.'
+          }
+
+      - name: Create GitHub Release
+        if: env.CREATE_RELEASE == 'true'
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ env.REPO_TOKEN }}
+          MODULE_NAME: ${{ env.MODULE_NAME }}
+          MODULE_VERSION: ${{ env.MODULE_VERSION }}
+        with:
+          tag_name: v${{ env.MODULE_VERSION }}
+          release_name: Release v${{ env.MODULE_VERSION }}
+          body: |
+            ## PowerShell Gallery Release
+
+            - Module: ${{ env.MODULE_NAME }}
+            - Version: ${{ env.MODULE_VERSION }}
+
+            ### Installation
+            ```powershell
+            Install-Module -Name ${{ env.MODULE_NAME }}
+            ```
+
+            ### Update
+            ```powershell
+            Update-Module -Name ${{ env.MODULE_NAME }}
+            ```
+          draft: false
+          prerelease: false
+
+  notify:
+    name: Publish Summary
+    runs-on: windows-latest
+    needs: [validate, publish]
+    if: always()
+    env:
+      SHOULD_PUBLISH: ${{ needs.validate.outputs.should_publish }}
+      VALIDATE_RESULT: ${{ needs.validate.result }}
+      PUBLISH_RESULT: ${{ needs.publish.result }}
+      MODULE_NAME: ${{ inputs.module-name }}
+      MODULE_VERSION: ${{ needs.validate.outputs.module_version }}
+    steps:
+      - name: Summarize Workflow
+        shell: pwsh
+        run: |
+          Write-Host "Validation job result: $env:VALIDATE_RESULT" -ForegroundColor Cyan
+          if ($env:SHOULD_PUBLISH -ne 'true') {
+            Write-Host 'Publish skipped because version already exists (use force-publish to override).' -ForegroundColor Yellow
+            return
+          }
+
+          Write-Host "Publish job result: $env:PUBLISH_RESULT" -ForegroundColor Cyan
+          if ($env:PUBLISH_RESULT -eq 'success') {
+            Write-Host "🎉 Successfully published $env:MODULE_NAME v$env:MODULE_VERSION to PowerShell Gallery." -ForegroundColor Green
+          }
+          elseif ($env:PUBLISH_RESULT -eq 'skipped') {
+            Write-Host 'Publish step was skipped. Check preceding jobs for issues.' -ForegroundColor Yellow
+          }
+          else {
+            Write-Host '❌ Publish step failed. Review logs for details.' -ForegroundColor Red
+          }

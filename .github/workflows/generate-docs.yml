@@ -1,0 +1,231 @@
+name: PowerShell Documentation Generation
+
+on:
+  workflow_call:
+    inputs:
+      module-name:
+        description: 'Name of the PowerShell module to load when generating documentation.'
+        required: true
+        type: string
+      module-path:
+        description: 'Relative path to the module directory that contains the manifest and source files.'
+        required: true
+        type: string
+      module-manifest:
+        description: 'Optional explicit path to the module manifest (.psd1). Defaults to <module-path>/<module-name>.psd1 when omitted.'
+        required: false
+        type: string
+      docs-path:
+        description: 'Relative path where the markdown documentation should be written.'
+        required: false
+        type: string
+        default: './docs'
+      locale:
+        description: 'Locale folder name to use when generating external help.'
+        required: false
+        type: string
+        default: 'en-US'
+      required-modules:
+        description: 'Optional newline-separated list of modules to install before generating documentation.'
+        required: false
+        type: string
+      pre-import-script-path:
+        description: 'Optional path to a PowerShell script to execute prior to importing the target module (for custom stubs or setup).'
+        required: false
+        type: string
+      commit-docs:
+        description: 'Set to false to skip committing documentation updates.'
+        required: false
+        type: boolean
+        default: true
+      git-user-name:
+        description: 'Optional Git username to use when committing documentation updates.'
+        required: false
+        type: string
+      git-user-email:
+        description: 'Optional Git email to use when committing documentation updates.'
+        required: false
+        type: string
+      commit-message:
+        description: 'Commit message to use when documentation changes are detected.'
+        required: false
+        type: string
+        default: 'docs: auto-generated PowerShell help [skip ci]'
+    secrets:
+      repo-token:
+        description: 'Optional token with contents: write permissions. Defaults to the calling workflow GITHUB_TOKEN when omitted.'
+        required: false
+
+jobs:
+  generate-docs:
+    name: Generate PowerShell Documentation
+    runs-on: windows-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      MODULE_NAME: ${{ inputs.module-name }}
+      MODULE_PATH: ${{ inputs.module-path }}
+      MODULE_MANIFEST: ${{ inputs.module-manifest != '' && inputs.module-manifest || format('{0}/{1}.psd1', inputs.module-path, inputs.module-name) }}
+      DOCS_PATH: ${{ inputs.docs-path }}
+      DOCS_LOCALE: ${{ inputs.locale }}
+      COMMIT_MESSAGE: ${{ inputs.commit-message }}
+      COMMIT_ENABLED: ${{ inputs.commit-docs }}
+      REQUIRED_MODULES: ${{ inputs.required-modules }}
+      PRE_IMPORT_SCRIPT: ${{ inputs.pre-import-script-path }}
+      GIT_USER_NAME: ${{ inputs.git-user-name }}
+      GIT_USER_EMAIL: ${{ inputs.git-user-email }}
+      REPO_TOKEN: ${{ secrets.repo-token != '' && secrets.repo-token || secrets.GITHUB_TOKEN }}
+    outputs:
+      docs-updated: ${{ steps.commit-docs.outputs.docs_updated }}
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ env.REPO_TOKEN }}
+
+      - name: Cache PowerShell Modules
+        id: cache-modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~\Documents\PowerShell\Modules
+            C:\Users\runneradmin\Documents\PowerShell\Modules
+          key: ${{ runner.os }}-pwsh-modules-${{ hashFiles(inputs.module-manifest != '' && inputs.module-manifest || format('{0}/{1}.psd1', inputs.module-path, inputs.module-name)) }}
+          restore-keys: |
+            ${{ runner.os }}-pwsh-modules-
+
+      - name: Install PlatyPS
+        if: steps.cache-modules.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          Install-Module -Name PlatyPS -Force -Scope CurrentUser -AllowClobber
+
+      - name: Install Required Modules
+        if: inputs.required-modules != ''
+        shell: pwsh
+        env:
+          REQUIRED_MODULES: ${{ env.REQUIRED_MODULES }}
+        run: |
+          $modules = $env:REQUIRED_MODULES -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+          foreach ($moduleName in $modules) {
+            Write-Host "Installing required module: $moduleName" -ForegroundColor Cyan
+            Install-Module -Name $moduleName -Force -Scope CurrentUser -AllowClobber
+          }
+
+      - name: Run Pre-Import Script
+        if: inputs.pre-import-script-path != ''
+        shell: pwsh
+        env:
+          SCRIPT_PATH: ${{ inputs.pre-import-script-path }}
+        run: |
+          $resolvedPath = Join-Path (Get-Location) $env:SCRIPT_PATH
+          if (-not (Test-Path $resolvedPath)) {
+            throw "Pre-import script not found at path: $resolvedPath"
+          }
+
+          Write-Host "Executing pre-import script at '$resolvedPath'..." -ForegroundColor Green
+          . $resolvedPath
+
+      - name: Import Module Dependencies
+        shell: pwsh
+        env:
+          MODULE_MANIFEST: ${{ env.MODULE_MANIFEST }}
+          MODULE_NAME: ${{ env.MODULE_NAME }}
+        run: |
+          Import-Module PlatyPS -Force
+          Import-Module $env:MODULE_MANIFEST -Force -Verbose
+
+          $module = Get-Module $env:MODULE_NAME
+          if (-not $module) {
+            throw "Module '$env:MODULE_NAME' failed to load."
+          }
+
+          Write-Host "Loaded module $($module.Name) version $($module.Version)." -ForegroundColor Green
+          Write-Host "Exported functions: $($module.ExportedFunctions.Keys -join ', ')" -ForegroundColor Cyan
+
+      - name: Generate Markdown Documentation
+        shell: pwsh
+        env:
+          MODULE_MANIFEST: ${{ env.MODULE_MANIFEST }}
+          MODULE_NAME: ${{ env.MODULE_NAME }}
+          DOCS_PATH: ${{ env.DOCS_PATH }}
+        run: |
+          Import-Module PlatyPS -Force
+          Import-Module $env:MODULE_MANIFEST -Force
+
+          if (-not (Test-Path $env:DOCS_PATH)) {
+            New-Item -Path $env:DOCS_PATH -ItemType Directory -Force | Out-Null
+          }
+
+          Write-Host 'Generating markdown help...' -ForegroundColor Green
+          New-MarkdownHelp -Module $env:MODULE_NAME -OutputFolder $env:DOCS_PATH -Force
+          New-MarkdownAboutHelp -OutputFolder $env:DOCS_PATH -AboutName $env:MODULE_NAME
+
+      - name: Update Existing Markdown
+        shell: pwsh
+        env:
+          DOCS_PATH: ${{ env.DOCS_PATH }}
+        run: |
+          Import-Module PlatyPS -Force
+          if (Test-Path $env:DOCS_PATH) {
+            Write-Host 'Updating existing markdown help files...' -ForegroundColor Green
+            Update-MarkdownHelpModule -Path $env:DOCS_PATH -RefreshModulePage
+          }
+
+      - name: Generate External Help
+        shell: pwsh
+        env:
+          DOCS_PATH: ${{ env.DOCS_PATH }}
+          MODULE_PATH: ${{ env.MODULE_PATH }}
+          DOCS_LOCALE: ${{ env.DOCS_LOCALE }}
+        run: |
+          Import-Module PlatyPS -Force
+
+          $helpPath = Join-Path $env:MODULE_PATH $env:DOCS_LOCALE
+          if (-not (Test-Path $helpPath)) {
+            New-Item -Path $helpPath -ItemType Directory -Force | Out-Null
+          }
+
+          Write-Host "Generating external help into '$helpPath'..." -ForegroundColor Green
+          New-ExternalHelp -Path $env:DOCS_PATH -OutputPath $helpPath -Force
+
+      - name: Commit Documentation Changes
+        id: commit-docs
+        if: env.COMMIT_ENABLED == 'true'
+        shell: pwsh
+        env:
+          DOCS_PATH: ${{ env.DOCS_PATH }}
+          MODULE_PATH: ${{ env.MODULE_PATH }}
+          DOCS_LOCALE: ${{ env.DOCS_LOCALE }}
+          COMMIT_MESSAGE: ${{ env.COMMIT_MESSAGE }}
+          GIT_USER_NAME: ${{ env.GIT_USER_NAME != '' && env.GIT_USER_NAME || 'github-actions[bot]' }}
+          GIT_USER_EMAIL: ${{ env.GIT_USER_EMAIL != '' && env.GIT_USER_EMAIL || 'github-actions[bot]@users.noreply.github.com' }}
+        run: |
+          git config user.name "$env:GIT_USER_NAME"
+          git config user.email "$env:GIT_USER_EMAIL"
+
+          git add $env:DOCS_PATH
+          git add (Join-Path $env:MODULE_PATH $env:DOCS_LOCALE)
+
+          $changes = git status --porcelain
+          if (-not [string]::IsNullOrWhiteSpace($changes)) {
+            git commit -m "$env:COMMIT_MESSAGE"
+            git push
+            "docs_updated=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          }
+          else {
+            Write-Host 'No documentation changes detected.' -ForegroundColor Yellow
+            "docs_updated=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          }
+
+      - name: Documentation Summary
+        if: always()
+        shell: pwsh
+        env:
+          DOCS_UPDATED: ${{ steps.commit-docs.outputs.docs_updated }}
+        run: |
+          $status = if ($env:DOCS_UPDATED -eq 'true') { 'updated' } elseif ($env:DOCS_UPDATED -eq 'false') { 'unchanged' } else { 'generated (not committed)' }
+          Write-Host "Documentation generation complete: $status." -ForegroundColor Cyan
