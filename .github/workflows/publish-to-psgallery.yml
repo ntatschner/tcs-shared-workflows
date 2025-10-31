@@ -136,6 +136,7 @@ jobs:
             try { $manifestData = Import-PowerShellDataFile -Path $resolvedManifestPath } catch { $manifestData = $null }
             $requiredModules = $manifestData.RequiredModules
             if ($requiredModules) {
+              $unresolved = @()
               foreach ($req in $requiredModules) {
                 $reqName = $null
                 if ($req -is [string]) { $reqName = $req }
@@ -165,10 +166,18 @@ jobs:
                       break
                     }
                   }
-                  if (-not $imported) { Write-Warning "Could not resolve required module '$reqName'." }
+                  if (-not $imported) {
+                    Write-Warning "Could not resolve required module '$reqName'."
+                    $unresolved += $reqName
+                  }
                 } else {
                   Write-Host "Required module '$reqName' already available." -ForegroundColor Green
                 }
+              }
+              if ($unresolved.Count -gt 0) {
+                $names = $unresolved -join ', '
+                Write-Error "Required module(s) could not be resolved: $names"
+                throw "Required module(s) could not be resolved: $names"
               }
             }
 
