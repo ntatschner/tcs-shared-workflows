@@ -250,6 +250,14 @@ jobs:
               # Fix cases where the opening ```yaml fence and the first YAML line were rendered on the same line
               # e.g. ```yaml Type: String[]
               $text = [regex]::Replace($text, '(?m)^```yaml[ \t]+(.+)$', '```yaml`r`n$1')
+
+              # Split multiple 'Key: Value' pairs that ended up on the same line inside YAML blocks
+              $text = [regex]::Replace($text, '(?ms)```yaml\s*(.+?)\s*```', [System.Text.RegularExpressions.MatchEvaluator]::new({ param($m)
+                $block = $m.Groups[1].Value
+                # Replace occurrences like 'Type: String[] Parameter Sets: Sequences' -> 'Type: String[]\nParameter Sets: Sequences'
+                $block = [regex]::Replace($block, '(:\s*[^:\r\n]+)\s+(?=[^:\r\n]+:)', '$1`r`n')
+                return "```yaml`r`n$block`r`n```"
+              }))
               foreach ($label in $patterns) {
                 $regex = "(?m)^\s*${label}:\s*-{3,}\s*$"
                 if ($text -match $regex) {
