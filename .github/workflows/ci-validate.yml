@@ -162,6 +162,7 @@ jobs:
             }
 
             if ($requiredModules) {
+              $unresolved = @()
               foreach ($req in $requiredModules) {
                 # req can be a string or a hashtable (Name/ModuleName)
                 $reqName = $null
@@ -203,10 +204,18 @@ jobs:
                       break
                     }
                   }
-                  if (-not $imported) { Write-Warning "Could not resolve required module '$reqName'. The module import may fail." }
+                  if (-not $imported) {
+                    Write-Warning "Could not resolve required module '$reqName'. This will cause the CI to fail." 
+                    $unresolved += $reqName
+                  }
                 } else {
                   Write-Host "Required module '$reqName' already available." -ForegroundColor Green
                 }
+              }
+              if ($unresolved.Count -gt 0) {
+                $names = $unresolved -join ', '
+                Write-Error "Required module(s) could not be resolved: $names"
+                throw "Required module(s) could not be resolved: $names"
               }
             }
 
