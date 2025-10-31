@@ -262,7 +262,8 @@ jobs:
                 # Build the regex by concatenation to avoid PowerShell parsing issues with (?m) and variable interpolation
                 $regex = '(?m)^\s*' + [regex]::Escape($label) + ':\s*-{3,}\s*$'
                 if ($text -match $regex) {
-                  Copy-Item -Path $path -Destination "${path}.bak" -ErrorAction SilentlyContinue
+                  $bak = $path + '.bak'
+                  Copy-Item -Path $path -Destination $bak -ErrorAction SilentlyContinue
                   $replacement = "`r`n### $($label.ToUpper())`r`n"
                   $text = [regex]::Replace($text, $regex, $replacement)
                 }
