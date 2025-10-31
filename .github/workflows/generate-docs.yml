@@ -249,14 +249,14 @@ jobs:
               $orig = $text
               # Fix cases where the opening ```yaml fence and the first YAML line were rendered on the same line
               # e.g. ```yaml Type: String[]
-              $text = [regex]::Replace($text, '(?m)^```yaml[ \t]+(.+)$', '```yaml`r`n$1')
+              $text = [regex]::Replace($text, '(?m)^```yaml[ \t]+(.+)$', [System.Text.RegularExpressions.MatchEvaluator]::new({ param($m) return '```yaml' + [Environment]::NewLine + $m.Groups[1].Value }))
 
               # Split multiple 'Key: Value' pairs that ended up on the same line inside YAML blocks
               $text = [regex]::Replace($text, '(?ms)```yaml\s*(.+?)\s*```', [System.Text.RegularExpressions.MatchEvaluator]::new({ param($m)
                 $block = $m.Groups[1].Value
                 # Replace occurrences like 'Type: String[] Parameter Sets: Sequences' -> 'Type: String[]\nParameter Sets: Sequences'
-                $block = [regex]::Replace($block, '(:\s*[^:\r\n]+)\s+(?=[^:\r\n]+:)', '$1`r`n')
-                return "```yaml`r`n$block`r`n```"
+                $block = [regex]::Replace($block, '(:\s*[^:\r\n]+)\s+(?=[^:\r\n]+:)', [System.Text.RegularExpressions.MatchEvaluator]::new({ param($mm) return $mm.Groups[1].Value + [Environment]::NewLine }))
+                return '```yaml' + [Environment]::NewLine + $block + [Environment]::NewLine + '```'
               }))
               foreach ($label in $patterns) {
                 # Build the regex by concatenation to avoid PowerShell parsing issues with (?m) and variable interpolation
@@ -264,7 +264,7 @@ jobs:
                 if ($text -match $regex) {
                   $bak = $path + '.bak'
                   Copy-Item -Path $path -Destination $bak -ErrorAction SilentlyContinue
-                  $replacement = "`r`n### $($label.ToUpper())`r`n"
+                  $replacement = [Environment]::NewLine + ('### ' + $label.ToUpper()) + [Environment]::NewLine
                   $text = [regex]::Replace($text, $regex, $replacement)
                 }
               }
