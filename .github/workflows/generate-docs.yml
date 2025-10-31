@@ -247,6 +247,9 @@ jobs:
                 return
               }
               $orig = $text
+              # Fix cases where the opening ```yaml fence and the first YAML line were rendered on the same line
+              # e.g. ```yaml Type: String[]
+              $text = [regex]::Replace($text, '(?m)^```yaml[ \t]+(.+)$', '```yaml`r`n$1')
               foreach ($label in $patterns) {
                 $regex = "(?m)^\s*${label}:\s*-{3,}\s*$"
                 if ($text -match $regex) {
