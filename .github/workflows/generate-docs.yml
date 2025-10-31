@@ -259,7 +259,7 @@ jobs:
                 return "```yaml`r`n$block`r`n```"
               }))
               foreach ($label in $patterns) {
-                # Build the regex by concatenation to avoid PowerShell parsing issues with (?m) and ${}
+                # Build the regex by concatenation to avoid PowerShell parsing issues with (?m) and variable interpolation
                 $regex = '(?m)^\s*' + [regex]::Escape($label) + ':\s*-{3,}\s*$'
                 if ($text -match $regex) {
                   Copy-Item -Path $path -Destination "${path}.bak" -ErrorAction SilentlyContinue
