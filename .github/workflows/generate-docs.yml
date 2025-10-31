@@ -239,6 +239,39 @@ jobs:
             Update-MarkdownHelpModule -Path $env:DOCS_PATH -RefreshModulePage
           }
 
+      - name: Normalize Markdown Headers
+        shell: pwsh
+        env:
+          DOCS_PATH: ${{ env.DOCS_PATH }}
+        run: |
+          Write-Host 'Normalizing markdown header patterns in generated docs...' -ForegroundColor Green
+          if (-not (Test-Path $env:DOCS_PATH)) { Write-Host 'Docs path not present, skipping normalization.' -ForegroundColor Yellow; exit 0 }
+
+          $patterns = @('Description','Synopsis','Parameters','Notes','Examples','Returns','Input','Output')
+          Get-ChildItem -Path $env:DOCS_PATH -Recurse -Filter *.md -ErrorAction SilentlyContinue |
+            ForEach-Object {
+              $path = $_.FullName
+              try {
+                $text = Get-Content -Raw -Encoding UTF8 -ErrorAction Stop $path
+              } catch {
+                Write-Warning "Could not read $path: $_"
+                return
+              }
+              $orig = $text
+              foreach ($label in $patterns) {
+                $regex = "(?m)^\s*${label}:\s*-{3,}\s*$"
+                if ($text -match $regex) {
+                  Copy-Item -Path $path -Destination "${path}.bak" -ErrorAction SilentlyContinue
+                  $replacement = "`r`n### $($label.ToUpper())`r`n"
+                  $text = [regex]::Replace($text, $regex, $replacement)
+                }
+              }
+              if ($text -ne $orig) {
+                Set-Content -Path $path -Value $text -Encoding UTF8
+                Write-Host "Patched: $path" -ForegroundColor Green
+              }
+            }
+
       - name: Generate External Help
         shell: pwsh
         env:
