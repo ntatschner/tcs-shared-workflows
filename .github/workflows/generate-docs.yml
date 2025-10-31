@@ -249,7 +249,7 @@ jobs:
               $orig = $text
               # Fix cases where the opening ```yaml fence and the first YAML line were rendered on the same line
               # e.g. ```yaml Type: String[]
-              $text = [regex]::Replace($text, '(?m)^```yaml[ \t]+(.+)$', [System.Text.RegularExpressions.MatchEvaluator]::new({ param($m) return '```yaml' + [Environment]::NewLine + $m.Groups[1].Value }))
+              $text = [regex]::Replace($text, '(?m)^```yaml[ \t]+(.+)$', { param($m) '```yaml' + [Environment]::NewLine + $m.Groups[1].Value })
 
               # Split multiple 'Key: Value' pairs that ended up on the same line inside YAML blocks
               $pattern = '(?ms)```yaml\s*(.+?)\s*```'
