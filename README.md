@@ -94,6 +94,26 @@ Each workflow provides detailed inputs and outputs. See the individual workflow 
 - **Robust logging**: Each step emits contextual PowerShell output to simplify troubleshooting
 - **Extensibility**: Optional inputs (smoke tests, pre-import scripts, commit control) keep workflows generic yet adaptable
 
+## RequiredModules resolution and strict failure behavior
+
+The workflows now automatically attempt to satisfy `RequiredModules` declared in a module's manifest (`.psd1`) before importing the target module. This helps avoid confusing import failures when a module lists nested dependencies (for example, `tcs.utils` requiring `tcs.core`).
+
+Behavior summary:
+- The workflow resolves the manifest path and reads the `RequiredModules` entry.
+- For each required module it will:
+  - First try to install it from PSGallery using `Install-Module`.
+  - If PSGallery install fails, it checks several common local paths relative to the manifest/repo (for example `modules/<name>`, `<name>\<name>.psd1`) and attempts to `Import-Module` from there.
+- If any required module remains unresolved after those attempts the workflow will write an error and fail (throw). The failing message will look like:
+
+  `Required module(s) could not be resolved: tcs.core, Other.Module`
+
+How to avoid a failure
+- Publish the dependency on PSGallery so the workflow can `Install-Module` it.
+- Provide the dependency in the same repository checkout (for example add `modules/tcs.core`), so the workflow picks it up from local paths.
+- Use the workflow inputs `required-modules` / `install-modules` (where available) to explicitly request installation of modules prior to import. Example input uses are shown in the workflow usage sections above.
+
+If you'd prefer the workflows to be tolerant (warn but continue) instead of failing, you can either remove the `RequiredModules` entry from the manifest or modify the workflow to change the final `throw` into a `Write-Warning`. If you'd like, I can add an input flag to make strict failure configurable — tell me and I will implement that.
+
 ## Contributing
 
 1. Fork this repository
