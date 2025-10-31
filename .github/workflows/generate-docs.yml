@@ -259,7 +259,7 @@ jobs:
                 foreach ($m in $matches) {
                   $inner = $m.Groups[1].Value
                   # Replace occurrences like 'Type: String[] Parameter Sets: Sequences' -> 'Type: String[]\nParameter Sets: Sequences'
-                  $newInner = [regex]::Replace($inner, '(:\s*[^:\r\n]+)\s+(?=[^:\r\n]+:)', '$1' + [Environment]::NewLine)
+                  $newInner = [regex]::Replace($inner, '(:\s*[^:\r\n]+?)\s+(?=[^:\r\n]+:)', '$1' + [Environment]::NewLine)
                   $newBlock = '```yaml' + [Environment]::NewLine + $newInner + [Environment]::NewLine + '```'
                   $start = $m.Index + $offset
                   $length = $m.Length
