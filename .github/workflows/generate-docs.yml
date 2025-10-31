@@ -259,7 +259,8 @@ jobs:
                 return "```yaml`r`n$block`r`n```"
               }))
               foreach ($label in $patterns) {
-                $regex = "(?m)^\s*${label}:\s*-{3,}\s*$"
+                # Build the regex by concatenation to avoid PowerShell parsing issues with (?m) and ${}
+                $regex = '(?m)^\s*' + [regex]::Escape($label) + ':\s*-{3,}\s*$'
                 if ($text -match $regex) {
                   Copy-Item -Path $path -Destination "${path}.bak" -ErrorAction SilentlyContinue
                   $replacement = "`r`n### $($label.ToUpper())`r`n"
