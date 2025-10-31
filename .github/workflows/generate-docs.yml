@@ -228,23 +228,12 @@ jobs:
           New-MarkdownHelp -Module $env:MODULE_NAME -OutputFolder $env:DOCS_PATH -Force
           New-MarkdownAboutHelp -OutputFolder $env:DOCS_PATH -AboutName $env:MODULE_NAME
 
-      - name: Update Existing Markdown
+      - name: Normalize Markdown Headers (post-generation)
         shell: pwsh
         env:
           DOCS_PATH: ${{ env.DOCS_PATH }}
         run: |
-          Import-Module PlatyPS -Force
-          if (Test-Path $env:DOCS_PATH) {
-            Write-Host 'Updating existing markdown help files...' -ForegroundColor Green
-            Update-MarkdownHelpModule -Path $env:DOCS_PATH -RefreshModulePage
-          }
-
-      - name: Normalize Markdown Headers
-        shell: pwsh
-        env:
-          DOCS_PATH: ${{ env.DOCS_PATH }}
-        run: |
-          Write-Host 'Normalizing markdown header patterns in generated docs...' -ForegroundColor Green
+          Write-Host 'Normalizing markdown header patterns in generated docs (post-generation)...' -ForegroundColor Green
           if (-not (Test-Path $env:DOCS_PATH)) { Write-Host 'Docs path not present, skipping normalization.' -ForegroundColor Yellow; exit 0 }
 
           $patterns = @('Description','Synopsis','Parameters','Notes','Examples','Returns','Input','Output')
@@ -271,6 +260,17 @@ jobs:
                 Write-Host "Patched: $path" -ForegroundColor Green
               }
             }
+
+      - name: Update Existing Markdown
+        shell: pwsh
+        env:
+          DOCS_PATH: ${{ env.DOCS_PATH }}
+        run: |
+          Import-Module PlatyPS -Force
+          if (Test-Path $env:DOCS_PATH) {
+            Write-Host 'Updating existing markdown help files...' -ForegroundColor Green
+            Update-MarkdownHelpModule -Path $env:DOCS_PATH -RefreshModulePage
+          }
 
       - name: Generate External Help
         shell: pwsh
