@@ -252,12 +252,21 @@ jobs:
               $text = [regex]::Replace($text, '(?m)^```yaml[ \t]+(.+)$', [System.Text.RegularExpressions.MatchEvaluator]::new({ param($m) return '```yaml' + [Environment]::NewLine + $m.Groups[1].Value }))
 
               # Split multiple 'Key: Value' pairs that ended up on the same line inside YAML blocks
-              $text = [regex]::Replace($text, '(?ms)```yaml\s*(.+?)\s*```', [System.Text.RegularExpressions.MatchEvaluator]::new({ param($m)
-                $block = $m.Groups[1].Value
-                # Replace occurrences like 'Type: String[] Parameter Sets: Sequences' -> 'Type: String[]\nParameter Sets: Sequences'
-                $block = [regex]::Replace($block, '(:\s*[^:\r\n]+)\s+(?=[^:\r\n]+:)', [System.Text.RegularExpressions.MatchEvaluator]::new({ param($mm) return $mm.Groups[1].Value + [Environment]::NewLine }))
-                return '```yaml' + [Environment]::NewLine + $block + [Environment]::NewLine + '```'
-              }))
+              $pattern = '(?ms)```yaml\s*(.+?)\s*```'
+              $matches = [regex]::Matches($text, $pattern)
+              if ($matches.Count -gt 0) {
+                $offset = 0
+                foreach ($m in $matches) {
+                  $inner = $m.Groups[1].Value
+                  # Replace occurrences like 'Type: String[] Parameter Sets: Sequences' -> 'Type: String[]\nParameter Sets: Sequences'
+                  $newInner = [regex]::Replace($inner, '(:\s*[^:\r\n]+)\s+(?=[^:\r\n]+:)', '$1' + [Environment]::NewLine)
+                  $newBlock = '```yaml' + [Environment]::NewLine + $newInner + [Environment]::NewLine + '```'
+                  $start = $m.Index + $offset
+                  $length = $m.Length
+                  $text = $text.Substring(0, $start) + $newBlock + $text.Substring($start + $length)
+                  $offset += ($newBlock.Length - $length)
+                }
+              }
               foreach ($label in $patterns) {
                 # Build the regex by concatenation to avoid PowerShell parsing issues with (?m) and variable interpolation
                 $regex = '(?m)^\s*' + [regex]::Escape($label) + ':\s*-{3,}\s*$'
