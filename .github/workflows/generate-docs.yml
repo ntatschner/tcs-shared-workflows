@@ -228,60 +228,6 @@ jobs:
           New-MarkdownHelp -Module $env:MODULE_NAME -OutputFolder $env:DOCS_PATH -Force
           New-MarkdownAboutHelp -OutputFolder $env:DOCS_PATH -AboutName $env:MODULE_NAME
 
-      - name: Normalize Markdown Headers (post-generation)
-        shell: pwsh
-        env:
-          DOCS_PATH: ${{ env.DOCS_PATH }}
-        run: |
-          Write-Host 'Normalizing markdown header patterns in generated docs (post-generation)...' -ForegroundColor Green
-          if (-not (Test-Path $env:DOCS_PATH)) { Write-Host 'Docs path not present, skipping normalization.' -ForegroundColor Yellow; exit 0 }
-
-          $patterns = @('Description','Synopsis','Parameters','Notes','Examples','Returns','Input','Output')
-          Get-ChildItem -Path $env:DOCS_PATH -Recurse -Filter *.md -ErrorAction SilentlyContinue |
-            ForEach-Object {
-              $path = $_.FullName
-              try {
-                $text = Get-Content -Raw -Encoding UTF8 -ErrorAction Stop $path
-              } catch {
-                Write-Warning ("Could not read {0}: {1}" -f $path, $_)
-                return
-              }
-              $orig = $text
-              # Fix cases where the opening ```yaml fence and the first YAML line were rendered on the same line
-              # e.g. ```yaml Type: String[]
-              $text = [regex]::Replace($text, '(?m)^```yaml[ \t]+(.+)$', { param($m) '```yaml' + [Environment]::NewLine + $m.Groups[1].Value })
-
-              # Split multiple 'Key: Value' pairs that ended up on the same line inside YAML blocks
-              $pattern = '(?ms)```yaml\s*(.+?)\s*```'
-              $matches = [regex]::Matches($text, $pattern)
-              if ($matches.Count -gt 0) {
-                $offset = 0
-                foreach ($m in $matches) {
-                  $inner = $m.Groups[1].Value
-                  # Replace occurrences like 'Type: String[] Parameter Sets: Sequences' -> 'Type: String[]\nParameter Sets: Sequences'
-                  $newInner = [regex]::Replace($inner, '(:\s*[^:\r\n]+?)\s+(?=[^:\r\n]+:)', '$1' + [Environment]::NewLine)
-                  $newBlock = '```yaml' + [Environment]::NewLine + $newInner + [Environment]::NewLine + '```'
-                  $start = $m.Index + $offset
-                  $length = $m.Length
-                  $text = $text.Substring(0, $start) + $newBlock + $text.Substring($start + $length)
-                  $offset += ($newBlock.Length - $length)
-                }
-              }
-              foreach ($label in $patterns) {
-                # Build the regex by concatenation to avoid PowerShell parsing issues with (?m) and variable interpolation
-                $regex = '(?m)^\s*' + [regex]::Escape($label) + ':\s*-{3,}\s*$'
-                if ($text -match $regex) {
-                  $bak = $path + '.bak'
-                  Copy-Item -Path $path -Destination $bak -ErrorAction SilentlyContinue
-                  $replacement = [Environment]::NewLine + ('### ' + $label.ToUpper()) + [Environment]::NewLine
-                  $text = [regex]::Replace($text, $regex, $replacement)
-                }
-              }
-              if ($text -ne $orig) {
-                Set-Content -Path $path -Value $text -Encoding UTF8
-                Write-Host "Patched: $path" -ForegroundColor Green
-              }
-            }
 
       - name: Update Existing Markdown
         shell: pwsh
@@ -289,10 +235,72 @@ jobs:
           DOCS_PATH: ${{ env.DOCS_PATH }}
         run: |
           Import-Module PlatyPS -Force
+
+          function Normalize-MarkdownHeaders {
+            param([string]$DocsPath)
+            if (-not (Test-Path $DocsPath)) {
+              Write-Host 'Docs path not present, skipping normalization.' -ForegroundColor Yellow
+              return
+            }
+
+            Write-Host 'Normalizing markdown header patterns in generated docs...' -ForegroundColor Green
+            $patterns = @('Description','Synopsis','Parameters','Notes','Examples','Returns','Input','Output')
+            Get-ChildItem -Path $DocsPath -Recurse -Filter *.md -ErrorAction SilentlyContinue |
+              ForEach-Object {
+                $path = $_.FullName
+                try {
+                  $text = Get-Content -Raw -Encoding UTF8 -ErrorAction Stop $path
+                } catch {
+                  Write-Warning ("Could not read {0}: {1}" -f $path, $_)
+                  return
+                }
+                $orig = $text
+                # Fix cases where the opening ```yaml fence and the first YAML line were rendered on the same line
+                # e.g. ```yaml Type: String[]
+                $text = [regex]::Replace($text, '(?m)^```yaml[ \t]+(.+)$', { param($m) '```yaml' + [Environment]::NewLine + $m.Groups[1].Value })
+
+                # Split multiple 'Key: Value' pairs that ended up on the same line inside YAML blocks
+                $pattern = '(?ms)```yaml\s*(.+?)\s*```'
+                $matches = [regex]::Matches($text, $pattern)
+                if ($matches.Count -gt 0) {
+                  $offset = 0
+                  foreach ($m in $matches) {
+                    $inner = $m.Groups[1].Value
+                    # Replace occurrences like 'Type: String[] Parameter Sets: Sequences' -> 'Type: String[]\nParameter Sets: Sequences'
+                    $newInner = [regex]::Replace($inner, '(:\s*[^:\r\n]+?)\s+(?=[^:\r\n]+:)', '$1' + [Environment]::NewLine)
+                    $newBlock = '```yaml' + [Environment]::NewLine + $newInner + [Environment]::NewLine + '```'
+                    $startIndex = $m.Index + $offset
+                    $length = $m.Length
+                    $text = $text.Substring(0, $startIndex) + $newBlock + $text.Substring($startIndex + $length)
+                    $offset += ($newBlock.Length - $length)
+                  }
+                }
+                foreach ($label in $patterns) {
+                  # Build the regex by concatenation to avoid PowerShell parsing issues with (?m) and variable interpolation
+                  $regex = '(?m)^\s*' + [regex]::Escape($label) + ':\s*-{3,}\s*$'
+                  if ($text -match $regex) {
+                    $bak = $path + '.bak'
+                    Copy-Item -Path $path -Destination $bak -ErrorAction SilentlyContinue
+                    $replacementLine = [Environment]::NewLine + ('### ' + $label.ToUpper()) + [Environment]::NewLine
+                    $text = [regex]::Replace($text, $regex, $replacementLine)
+                  }
+                }
+                if ($text -ne $orig) {
+                  Set-Content -Path $path -Value $text -Encoding UTF8
+                  Write-Host "Patched: $path" -ForegroundColor Green
+                }
+              }
+          }
+
+          Normalize-MarkdownHeaders -DocsPath $env:DOCS_PATH
+
           if (Test-Path $env:DOCS_PATH) {
             Write-Host 'Updating existing markdown help files...' -ForegroundColor Green
             Update-MarkdownHelpModule -Path $env:DOCS_PATH -RefreshModulePage
           }
+
+          Normalize-MarkdownHeaders -DocsPath $env:DOCS_PATH
+
 
       - name: Generate External Help
         shell: pwsh
@@ -348,3 +356,4 @@ jobs:
         run: |
           $status = if ($env:DOCS_UPDATED -eq 'true') { 'updated' } elseif ($env:DOCS_UPDATED -eq 'false') { 'unchanged' } else { 'generated (not committed)' }
           Write-Host "Documentation generation complete: $status." -ForegroundColor Cyan
+
