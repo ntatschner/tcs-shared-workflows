@@ -24,7 +24,7 @@ on:
         description: 'Locale folder name to use when generating external help.'
         required: false
         type: string
-        default: 'en-US'
+        default: 'en-GB'
       required-modules:
         description: 'Optional newline-separated list of modules to install before generating documentation.'
         required: false
