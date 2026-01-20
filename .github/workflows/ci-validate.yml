@@ -40,6 +40,25 @@ jobs:
       ANALYZER_SEVERITY: ${{ inputs.script-analyzer-severity }}
 
     steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install Validation Dependencies
+        shell: pwsh
+        env:
+          INSTALL_MODULES: ${{ inputs.install-modules }}
+        run: |
+          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction SilentlyContinue
+          Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser -AllowClobber
+
+          if ($env:INSTALL_MODULES) {
+            $modules = $env:INSTALL_MODULES -split "`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+            foreach ($moduleName in $modules) {
+              Write-Host "Installing requested module: $moduleName" -ForegroundColor Cyan
+              Install-Module -Name $moduleName -Force -Scope CurrentUser -AllowClobber
+            }
+          }
+
       - name: Run PSScriptAnalyzer
         shell: pwsh
         env:

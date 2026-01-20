@@ -299,14 +299,14 @@ jobs:
 
       - name: Create GitHub Release
         if: env.CREATE_RELEASE == 'true'
-        uses: actions/create-release@v1
+        uses: softprops/action-gh-release@v2
         env:
           GITHUB_TOKEN: ${{ env.REPO_TOKEN }}
           MODULE_NAME: ${{ env.MODULE_NAME }}
           MODULE_VERSION: ${{ env.MODULE_VERSION }}
         with:
           tag_name: v${{ env.MODULE_VERSION }}
-          release_name: Release v${{ env.MODULE_VERSION }}
+          name: Release v${{ env.MODULE_VERSION }}
           body: |
             ## PowerShell Gallery Release
 

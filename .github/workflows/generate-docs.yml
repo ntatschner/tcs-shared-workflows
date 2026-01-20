@@ -334,6 +334,8 @@ jobs:
           git config user.name "$env:GIT_USER_NAME"
           git config user.email "$env:GIT_USER_EMAIL"
 
+          git pull --rebase
+
           git add $env:DOCS_PATH
           git add (Join-Path $env:MODULE_PATH $env:DOCS_LOCALE)
 

@@ -1,5 +1,10 @@
 # TCS Shared GitHub Actions Workflows
 
+[![CI Validate](https://img.shields.io/github/actions/workflow/status/ntatschner/tcs-shared-workflows/ci-validate.yml?branch=main&label=CI%20Validate)](https://github.com/ntatschner/tcs-shared-workflows/actions/workflows/ci-validate.yml)
+[![Docs Generation](https://img.shields.io/github/actions/workflow/status/ntatschner/tcs-shared-workflows/generate-docs.yml?branch=main&label=Docs)](https://github.com/ntatschner/tcs-shared-workflows/actions/workflows/generate-docs.yml)
+[![Publish to PSGallery](https://img.shields.io/github/actions/workflow/status/ntatschner/tcs-shared-workflows/publish-to-psgallery.yml?branch=main&label=Publish)](https://github.com/ntatschner/tcs-shared-workflows/actions/workflows/publish-to-psgallery.yml)
+[![Publish Docs Website](https://img.shields.io/github/actions/workflow/status/ntatschner/tcs-shared-workflows/publish-docs-website.yml?branch=main&label=Docs%20Site)](https://github.com/ntatschner/tcs-shared-workflows/actions/workflows/publish-docs-website.yml)
+
 This repository contains reusable GitHub Actions workflows for PowerShell module development, including validation, documentation generation, and publishing to PowerShell Gallery and documentation websites.
 
 ## Available Workflows
@@ -19,7 +24,7 @@ jobs:
     uses: ntatschner/tcs-shared-workflows/.github/workflows/ci-validate.yml@main
     with:
       module-name: 'MyModule'
-      module-path: './src/MyModule'
+      module-path: './modules/MyModule'
       install-modules: |
         tcs.core
         Microsoft.Graph.Authentication
@@ -41,7 +46,7 @@ jobs:
     uses: ntatschner/tcs-shared-workflows/.github/workflows/generate-docs.yml@main
     with:
       module-name: 'MyModule'
-      module-path: './src/MyModule'
+      module-path: './modules/MyModule'
       docs-path: './docs'
       required-modules: |
         PlatyPS
@@ -67,12 +72,35 @@ jobs:
     uses: ntatschner/tcs-shared-workflows/.github/workflows/publish-to-psgallery.yml@main
     with:
       module-name: 'MyModule'
-      module-path: './src/MyModule'
+      module-path: './modules/MyModule'
       force-publish: false
       create-release: true
       run-validation: true
     secrets:
       psgallery-api-key: ${{ secrets.PSGALLERY_API_KEY }}
+```
+
+### 4. Documentation Website Publishing (`publish-docs-website.yml`)
+
+Publishes generated documentation to an external site (API method implemented; git/ftp paths deliberately fail fast until implemented):
+- Validates doc path and file count
+- Packages docs with metadata
+- Posts to a configurable API endpoint with optional dry-run
+
+**Usage:**
+```yaml
+jobs:
+  publish-docs:
+    uses: ntatschner/tcs-shared-workflows/.github/workflows/publish-docs-website.yml@main
+    with:
+      docs_path: './docs'
+      website_api_endpoint: 'https://docs.example.com/api/publish'
+      publish_method: 'api' # 'git' and 'ftp' currently exit as not implemented
+      module_name: 'MyModule'
+      docs_version: '1.0.0'
+      dry_run: false
+    secrets:
+      WEBSITE_API_KEY: ${{ secrets.DOCS_API_KEY }}
 ```
 
 ## Required Secrets
@@ -93,6 +121,7 @@ Each workflow provides detailed inputs and outputs. See the individual workflow 
 - **Caching**: PowerShell modules are cached to keep runs fast while remaining configurable
 - **Robust logging**: Each step emits contextual PowerShell output to simplify troubleshooting
 - **Extensibility**: Optional inputs (smoke tests, pre-import scripts, commit control) keep workflows generic yet adaptable
+- **Module layout**: Prefer `modules/<name>` so local dependency probing aligns with the built-in search heuristics
 
 ## RequiredModules resolution and strict failure behavior
 
@@ -125,4 +154,3 @@ If you'd prefer the workflows to be tolerant (warn but continue) instead of fail
 ## License
 
 MIT License - see LICENSE file for details
-shared workflows to perform doc creation and publishing of powershell modules

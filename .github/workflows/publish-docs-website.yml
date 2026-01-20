@@ -141,42 +141,26 @@ jobs:
       if: inputs.publish_method == 'api'
       shell: bash
       run: |
+        set -eo pipefail
         echo "Publishing documentation via API..."
-        
+
         API_ENDPOINT="${{ inputs.website_api_endpoint }}"
         API_KEY="${{ secrets.WEBSITE_API_KEY }}"
         AUTH_TOKEN="${{ secrets.WEBSITE_AUTH_TOKEN }}"
         PACKAGE_DIR="${{ steps.prepare.outputs.package_dir }}"
         DRY_RUN="${{ inputs.dry_run }}"
-        
+
         if [ -z "$API_KEY" ]; then
           echo "❌ WEBSITE_API_KEY secret is required"
           exit 1
         fi
-        
+
         if [ -z "$API_ENDPOINT" ]; then
           echo "❌ website_api_endpoint input is required"
           exit 1
         fi
-        
-        # Prepare headers
-        HEADERS="-H 'Content-Type: application/json' -H 'X-API-Key: $API_KEY'"
-        
-        if [ -n "$AUTH_TOKEN" ]; then
-          HEADERS="$HEADERS -H 'Authorization: Bearer $AUTH_TOKEN'"
-        fi
-        
-        if [ "$DRY_RUN" = "true" ]; then
-          HEADERS="$HEADERS -H 'X-Dry-Run: true'"
-          echo "🔍 Performing dry run - no actual publishing will occur"
-        fi
-        
-        # TODO: Customize this section based on your API requirements
-        # This is a scaffolded example - modify according to your API specification
-        
+
         echo "Preparing API payload..."
-        
-        # Create a simple payload structure (customize as needed)
         PAYLOAD=$(cat << EOF
         {
           "module_name": "${{ inputs.module_name }}",
@@ -188,52 +172,50 @@ jobs:
         }
         EOF
         )
-        
-        # Add files to payload (this is a simplified approach)
-        # In a real scenario, you might need to:
-        # 1. Base64 encode files
-        # 2. Upload files to a separate endpoint first
-        # 3. Send file references instead of content
-        # 4. Use multipart/form-data instead of JSON
-        
-        echo "Sending documentation to API endpoint..."
-        
-        # Example API call (customize based on your API)
-        RESPONSE=$(curl -s -w "\n%{http_code}" \
-          -X POST \
-          $HEADERS \
-          -d "$PAYLOAD" \
-          "$API_ENDPOINT" 2>&1)
-        
-        # Extract HTTP status code (last line) and response body
+
+        CURL_ARGS=(
+          -s -w "\n%{http_code}"
+          -X POST
+          -H "Content-Type: application/json"
+          -H "X-API-Key: $API_KEY"
+        )
+
+        if [ -n "$AUTH_TOKEN" ]; then
+          CURL_ARGS+=( -H "Authorization: Bearer $AUTH_TOKEN" )
+        fi
+
+        if [ "$DRY_RUN" = "true" ]; then
+          CURL_ARGS+=( -H "X-Dry-Run: true" )
+          echo "🔍 Performing dry run - no actual publishing will occur"
+        fi
+
+        RESPONSE=$(curl "${CURL_ARGS[@]}" -d "$PAYLOAD" "$API_ENDPOINT" 2>&1)
         HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
         RESPONSE_BODY=$(echo "$RESPONSE" | sed '$d')
-        
+
         echo "HTTP Status Code: $HTTP_CODE"
-        echo "Response: $RESPONSE_BODY"
-        
+        if [ -n "$RESPONSE_BODY" ]; then
+          echo "Response (truncated):" $(echo "$RESPONSE_BODY" | head -c 400)
+        fi
+
         if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
           echo "✅ Documentation published successfully"
-          
-          # Try to extract documentation URL from response (customize as needed)
-          DOCS_URL=$(echo "$RESPONSE_BODY" | grep -o '"url":"[^"]*"' | cut -d'"' -f4 || echo "")
-          
+
+          DOCS_URL=$(echo "$RESPONSE_BODY" | jq -r '.url // empty' 2>/dev/null || true)
           if [ -z "$DOCS_URL" ]; then
-            # Fallback URL construction (customize as needed)
             DOCS_URL="${API_ENDPOINT%/api/*}/docs/${{ inputs.module_name }}"
           fi
-          
+
           echo "published=true" >> $GITHUB_OUTPUT
           echo "docs_url=$DOCS_URL" >> $GITHUB_OUTPUT
-          
+
           if [ "$DRY_RUN" = "true" ]; then
             echo "🔍 Dry run completed successfully"
-          else {
+          else
             echo "📖 Documentation available at: $DOCS_URL"
           fi
         else
           echo "❌ API request failed with status $HTTP_CODE"
-          echo "Response: $RESPONSE_BODY"
           echo "published=false" >> $GITHUB_OUTPUT
           exit 1
         fi
@@ -253,6 +235,7 @@ jobs:
         # Placeholder for git-based publishing
         echo "published=false" >> $GITHUB_OUTPUT
         echo "This publishing method is not yet implemented" >> $GITHUB_OUTPUT
+          exit 1
 
     - name: Publish via FTP (Alternative Method)
       id: publish_ftp
@@ -268,6 +251,7 @@ jobs:
         # Placeholder for FTP-based publishing
         echo "published=false" >> $GITHUB_OUTPUT
         echo "This publishing method is not yet implemented" >> $GITHUB_OUTPUT
+          exit 1
 
     - name: Cleanup
       if: always()
