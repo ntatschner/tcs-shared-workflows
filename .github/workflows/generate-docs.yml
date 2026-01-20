@@ -344,6 +344,44 @@ jobs:
         run: |
           Import-Module PlatyPS -Force
 
+          # Final normalization pass right before generating external help
+          Write-Host 'Final YAML normalization pass before external help generation...' -ForegroundColor Cyan
+          Get-ChildItem -Path $env:DOCS_PATH -Filter *.md -File -ErrorAction SilentlyContinue | ForEach-Object {
+            $path = $_.FullName
+            try {
+              $text = Get-Content -Raw -Encoding UTF8 -ErrorAction Stop $path
+              $orig = $text
+              
+              # Fix inline YAML (```yaml Type: String[] on same line)
+              $text = [regex]::Replace($text, '(?m)^```yaml[ \t]+(.+)$', { param($m) '```yaml' + [Environment]::NewLine + $m.Groups[1].Value })
+              
+              # Aggressively fix cramped YAML blocks
+              $pattern = '(?ms)```yaml\s*(.+?)\s*```'
+              $matches = [regex]::Matches($text, $pattern)
+              if ($matches.Count -gt 0) {
+                $offset = 0
+                foreach ($m in $matches) {
+                  $inner = $m.Groups[1].Value
+                  # Split on any uppercase letter followed by text and colon that appears after whitespace
+                  # Handles: "Type: String[] Parameter Sets: (All)" -> split before "Parameter Sets:"
+                  $fixed = $inner -replace '(\S)\s+([A-Z][a-zA-Z0-9\s]*:)', ('$1' + [Environment]::NewLine + '$2')
+                  $newBlock = '```yaml' + [Environment]::NewLine + $fixed + [Environment]::NewLine + '```'
+                  $startIndex = $m.Index + $offset
+                  $length = $m.Length
+                  $text = $text.Substring(0, $startIndex) + $newBlock + $text.Substring($startIndex + $length)
+                  $offset += ($newBlock.Length - $length)
+                }
+              }
+              
+              if ($text -ne $orig) {
+                Set-Content -Path $path -Value $text -Encoding UTF8 -NoNewline
+                Write-Host "  Fixed YAML in: $($_.Name)" -ForegroundColor Green
+              }
+            } catch {
+              Write-Warning "  Could not process $($_.Name): $_"
+            }
+          }
+
           $helpPath = Join-Path $env:MODULE_PATH $env:DOCS_LOCALE
           if (-not (Test-Path $helpPath)) {
             New-Item -Path $helpPath -ItemType Directory -Force | Out-Null
