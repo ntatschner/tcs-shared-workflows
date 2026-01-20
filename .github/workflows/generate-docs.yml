@@ -274,8 +274,29 @@ jobs:
                   $offset = 0
                   foreach ($m in $matches) {
                     $inner = $m.Groups[1].Value
-                    # Replace occurrences like 'Type: String[] Parameter Sets: Sequences' -> 'Type: String[]\nParameter Sets: Sequences'
-                    $newInner = [regex]::Replace($inner, '(:\s*[^:\r\n]+?)\s+(?=[^:\r\n]+:)', '$1' + [Environment]::NewLine)
+                    # More aggressive splitting: split on any pattern that looks like 'Key:'
+                    # This handles cases like 'Type: String[] Parameter Sets: (All)' or 'Required: True Aliases: none'
+                    $lines = @()
+                    $currentLine = ''
+                    $tokens = $inner -split '(\s+(?=[A-Z][a-zA-Z\s]+:))'
+                    foreach ($token in $tokens) {
+                      if ($token -match '^\s+$') { continue }
+                      if ($currentLine -and $token -match '^[A-Z][a-zA-Z\s]+:') {
+                        $lines += $currentLine.TrimEnd()
+                        $currentLine = $token.TrimStart()
+                      } else {
+                        $currentLine += $token
+                      }
+                    }
+                    if ($currentLine) { $lines += $currentLine.TrimEnd() }
+                    
+                    if ($lines.Count -gt 0) {
+                      $newInner = $lines -join [Environment]::NewLine
+                    } else {
+                      # Fallback to original regex
+                      $newInner = [regex]::Replace($inner, '(:\s*[^:\r\n]+?)\s{2,}(?=[A-Z][a-zA-Z\s]+:)', '$1' + [Environment]::NewLine)
+                    }
+                    
                     $newBlock = '```yaml' + [Environment]::NewLine + $newInner + [Environment]::NewLine + '```'
                     $startIndex = $m.Index + $offset
                     $length = $m.Length
@@ -329,7 +350,35 @@ jobs:
           }
 
           Write-Host "Generating external help into '$helpPath'..." -ForegroundColor Green
-          New-ExternalHelp -Path $env:DOCS_PATH -OutputPath $helpPath -Force
+          try {
+            New-ExternalHelp -Path $env:DOCS_PATH -OutputPath $helpPath -Force -ErrorAction Stop
+            Write-Host "✅ External help generated successfully." -ForegroundColor Green
+          } catch {
+            Write-Warning "New-ExternalHelp encountered errors. This may be due to malformed YAML in markdown files."
+            Write-Warning "Error details: $_"
+            
+            # Try processing files individually to identify problematic ones
+            Write-Host "Attempting to generate help for individual files..." -ForegroundColor Yellow
+            $mdFiles = Get-ChildItem -Path $env:DOCS_PATH -Filter *.md -File
+            $successCount = 0
+            $failCount = 0
+            
+            foreach ($file in $mdFiles) {
+              try {
+                New-ExternalHelp -Path $file.FullName -OutputPath $helpPath -Force -ErrorAction Stop | Out-Null
+                $successCount++
+              } catch {
+                Write-Warning "  ❌ Failed to process: $($file.Name) - $($_.Exception.Message)"
+                $failCount++
+              }
+            }
+            
+            Write-Host "External help generation completed with $successCount succeeded, $failCount failed." -ForegroundColor $(if ($failCount -gt 0) { 'Yellow' } else { 'Green' })
+            
+            if ($failCount -eq $mdFiles.Count) {
+              throw "All markdown files failed to generate external help."
+            }
+          }
 
       - name: Commit Documentation Changes
         id: commit-docs
