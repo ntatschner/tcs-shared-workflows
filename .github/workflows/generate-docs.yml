@@ -233,8 +233,16 @@ jobs:
         shell: pwsh
         env:
           DOCS_PATH: ${{ env.DOCS_PATH }}
+          MODULE_MANIFEST: ${{ env.MODULE_MANIFEST }}
         run: |
           Import-Module PlatyPS -Force
+
+          try {
+            $resolvedManifestPath = Resolve-Path -Path $env:MODULE_MANIFEST -ErrorAction Stop
+            Import-Module -Name $resolvedManifestPath -Force -ErrorAction Stop
+          } catch {
+            Write-Warning "Module import failed before Update-MarkdownHelpModule: $_"
+          }
 
           function Normalize-MarkdownHeaders {
             param([string]$DocsPath)
@@ -296,7 +304,11 @@ jobs:
 
           if (Test-Path $env:DOCS_PATH) {
             Write-Host 'Updating existing markdown help files...' -ForegroundColor Green
-            Update-MarkdownHelpModule -Path $env:DOCS_PATH -RefreshModulePage
+            try {
+              Update-MarkdownHelpModule -Path $env:DOCS_PATH -RefreshModulePage -ErrorAction Stop
+            } catch {
+              Write-Warning "Update-MarkdownHelpModule reported an error; continuing: $_"
+            }
           }
 
           Normalize-MarkdownHeaders -DocsPath $env:DOCS_PATH
