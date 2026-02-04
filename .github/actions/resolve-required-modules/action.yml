@@ -1,0 +1,17 @@
+name: 'Resolve RequiredModules'
+description: 'Installs/imports RequiredModules from a module manifest (PSGallery first, then local paths).'
+inputs:
+  module-manifest:
+    description: 'Path to the module manifest (.psd1), relative to the repository root.'
+    required: true
+runs:
+  using: 'composite'
+  steps:
+    - name: Resolve RequiredModules
+      shell: pwsh
+      run: |
+        $scriptPath = Join-Path $env:GITHUB_ACTION_PATH 'Resolve-RequiredModules.ps1'
+        if (-not (Test-Path $scriptPath)) {
+          throw "Resolve-RequiredModules.ps1 not found at: $scriptPath"
+        }
+        & $scriptPath -ManifestPath '${{ inputs.module-manifest }}'

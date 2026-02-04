@@ -129,6 +129,11 @@ jobs:
           Write-Host "Executing pre-import script at '$resolvedPath'..." -ForegroundColor Green
           . $resolvedPath
 
+      - name: Resolve RequiredModules
+        uses: ./.github/actions/resolve-required-modules
+        with:
+          module-manifest: ${{ env.MODULE_MANIFEST }}
+
       - name: Import Module Dependencies
         shell: pwsh
         env:
@@ -137,67 +142,6 @@ jobs:
         run: |
           Import-Module PlatyPS -Force
           $resolvedManifestPath = Resolve-Path -Path $env:MODULE_MANIFEST -ErrorAction Stop
-
-          # Install/import RequiredModules declared in the manifest (PSGallery first, then local paths)
-          try {
-            $manifestData = Import-PowerShellDataFile -Path $resolvedManifestPath
-            $requiredModules = $manifestData.RequiredModules
-          } catch {
-            $requiredModules = $null
-          }
-
-          if ($requiredModules) {
-            $unresolved = @()
-            foreach ($req in $requiredModules) {
-              $reqName = $null
-              if ($req -is [string]) { $reqName = $req }
-              elseif ($req -is [hashtable] -or $req -is [psobject]) {
-                if ($req.ContainsKey('ModuleName')) { $reqName = $req.ModuleName }
-                elseif ($req.ContainsKey('Name')) { $reqName = $req.Name }
-                else { $reqName = $req.Values | Select-Object -First 1 }
-              }
-              if (-not $reqName) { continue }
-              if (-not (Get-Module -ListAvailable -Name $reqName)) {
-                Write-Host "Required module '$reqName' not found. Trying PSGallery..." -ForegroundColor Yellow
-                try {
-                  Install-Module -Name $reqName -Force -Scope CurrentUser -AllowClobber -ErrorAction Stop
-                  Write-Host "Installed '$reqName'." -ForegroundColor Green
-                  continue
-                } catch {
-                  Write-Host "PSGallery install failed for '$reqName'. Checking local paths." -ForegroundColor Yellow
-                }
-
-                $parent = Split-Path $resolvedManifestPath -Parent
-                $candidates = @(
-                  Join-Path $parent $reqName,
-                  Join-Path $parent "$reqName\$reqName.psd1",
-                  Join-Path (Get-Location) "modules\$reqName\$reqName.psd1",
-                  Join-Path (Get-Location) "modules\$reqName"
-                )
-                $imported = $false
-                foreach ($cand in $candidates) {
-                  if (Test-Path $cand) {
-                    $p = Resolve-Path -Path $cand
-                    Write-Host "Importing dependency '$reqName' from: $p" -ForegroundColor Cyan
-                    Import-Module -Name $p -Force -ErrorAction Stop
-                    $imported = $true
-                    break
-                  }
-                }
-                if (-not $imported) {
-                  Write-Warning "Could not resolve required module '$reqName'."
-                  $unresolved += $reqName
-                }
-              } else {
-                Write-Host "Required module '$reqName' already available." -ForegroundColor Green
-              }
-            }
-            if ($unresolved.Count -gt 0) {
-              $names = $unresolved -join ', '
-              Write-Error "Required module(s) could not be resolved: $names"
-              throw "Required module(s) could not be resolved: $names"
-            }
-          }
 
           Import-Module -Name $resolvedManifestPath -Force -Verbose
 

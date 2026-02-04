@@ -104,6 +104,11 @@ jobs:
             Write-Host '✅ No PSScriptAnalyzer issues detected.' -ForegroundColor Green
           }
 
+      - name: Resolve RequiredModules
+        uses: ./.github/actions/resolve-required-modules
+        with:
+          module-manifest: ${{ env.MODULE_MANIFEST }}
+
       - name: Import Module and Inspect Exports
         shell: pwsh
         env:
@@ -114,72 +119,6 @@ jobs:
 
           try {
             $resolvedManifestPath = Resolve-Path -Path $env:MODULE_MANIFEST -ErrorAction Stop
-
-            # Ensure RequiredModules listed in the manifest are available (try PSGallery, then local paths)
-            try {
-              $manifestData = Import-PowerShellDataFile -Path $resolvedManifestPath
-              $requiredModules = $manifestData.RequiredModules
-            } catch {
-              $requiredModules = $null
-            }
-
-            if ($requiredModules) {
-              $unresolved = @()
-              foreach ($req in $requiredModules) {
-                # req can be a string or a hashtable (Name/ModuleName)
-                $reqName = $null
-                if ($req -is [string]) { $reqName = $req }
-                elseif ($req -is [hashtable] -or $req -is [psobject]) {
-                  if ($req.ContainsKey('ModuleName')) { $reqName = $req.ModuleName }
-                  elseif ($req.ContainsKey('Name')) { $reqName = $req.Name }
-                  else { $reqName = $req.Values | Select-Object -First 1 }
-                }
-
-                if (-not $reqName) { continue }
-
-                if (-not (Get-Module -ListAvailable -Name $reqName)) {
-                  Write-Host "Required module '$reqName' not found. Attempting to install from PSGallery..." -ForegroundColor Yellow
-                  try {
-                    Install-Module -Name $reqName -Force -Scope CurrentUser -AllowClobber -ErrorAction Stop
-                    Write-Host "Installed '$reqName' from PSGallery." -ForegroundColor Green
-                    continue
-                  } catch {
-                    Write-Host "PSGallery install failed for '$reqName' - will try local paths if present." -ForegroundColor Yellow
-                  }
-
-                  # Try common local locations relative to the manifest or repo
-                  $parent = Split-Path $resolvedManifestPath -Parent
-                  $candidates = @(
-                    Join-Path $parent $reqName,
-                    Join-Path $parent "$reqName\$reqName.psd1",
-                    Join-Path (Get-Location) $reqName,
-                    Join-Path (Get-Location) "modules\$reqName\$reqName.psd1",
-                    Join-Path (Get-Location) "modules\$reqName"
-                  )
-                  $imported = $false
-                  foreach ($cand in $candidates) {
-                    if (Test-Path $cand) {
-                      $p = Resolve-Path -Path $cand
-                      Write-Host "Importing dependency '$reqName' from path: $p" -ForegroundColor Cyan
-                      Import-Module -Name $p -Force -ErrorAction Stop
-                      $imported = $true
-                      break
-                    }
-                  }
-                  if (-not $imported) {
-                    Write-Warning "Could not resolve required module '$reqName'. This will cause the CI to fail." 
-                    $unresolved += $reqName
-                  }
-                } else {
-                  Write-Host "Required module '$reqName' already available." -ForegroundColor Green
-                }
-              }
-              if ($unresolved.Count -gt 0) {
-                $names = $unresolved -join ', '
-                Write-Error "Required module(s) could not be resolved: $names"
-                throw "Required module(s) could not be resolved: $names"
-              }
-            }
 
             Import-Module -Name $resolvedManifestPath -Force -ErrorAction Stop
             Write-Host "✅ Module '$env:MODULE_NAME' imported successfully." -ForegroundColor Green

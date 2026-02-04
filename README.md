@@ -7,6 +7,8 @@
 
 This repository contains reusable GitHub Actions workflows for PowerShell module development, including validation, documentation generation, and publishing to PowerShell Gallery and documentation websites.
 
+**Adding a new module repo?** See [NEW_MODULE.md](NEW_MODULE.md) for the contract (required/optional inputs), checklist, and template workflow files so you can add a new module without changing CI/CD.
+
 ## Available Workflows
 
 ### 1. PowerShell Module Validation (`ci-validate.yml`)
@@ -87,6 +89,8 @@ Publishes generated documentation to an external site (API method implemented; g
 - Packages docs with metadata
 - Posts to a configurable API endpoint with optional dry-run
 
+**When to use:** Call this workflow from a module repo when you have an external documentation site with an API that accepts doc packages (e.g. after `generate-docs` has run). No TCS module repo uses it yet; add a job that calls this workflow when you have a docs site API and the required secrets (`WEBSITE_API_KEY`, optional `WEBSITE_AUTH_TOKEN`).
+
 **Usage:**
 ```yaml
 jobs:
@@ -102,6 +106,16 @@ jobs:
     secrets:
       WEBSITE_API_KEY: ${{ secrets.DOCS_API_KEY }}
 ```
+
+## Versioning shared workflows
+
+Callers currently use `@main` (e.g. `.../ci-validate.yml@main`). To avoid unexpected breakage when shared workflows change, you can pin to a versioned tag:
+
+1. In **tcs-shared-workflows**, create a tag (e.g. `v1`) on the commit you want to ship:  
+   `git tag v1 && git push origin v1`
+2. In each **module repo**, change workflow references from `@main` to `@v1` (or the tag you use).
+
+When you intentionally roll out a new workflow version, update the tag (e.g. move `v1` to a new commit, or introduce `v2`) and update module repos to the new tag. Document tag meanings in this repo (e.g. in release notes or this README) so consumers know when to bump.
 
 ## Required Secrets
 
@@ -125,7 +139,7 @@ Each workflow provides detailed inputs and outputs. See the individual workflow 
 
 ## RequiredModules resolution and strict failure behavior
 
-The workflows now automatically attempt to satisfy `RequiredModules` declared in a module's manifest (`.psd1`) before importing the target module. This helps avoid confusing import failures when a module lists nested dependencies (for example, `tcs.utils` requiring `tcs.core`).
+The workflows use a shared composite action (`.github/actions/resolve-required-modules`) to satisfy `RequiredModules` declared in a module's manifest (`.psd1`) before importing the target module. This keeps resolution logic in one place (install from PSGallery, then try local paths) and is used by ci-validate, generate-docs, and publish-to-psgallery. This helps avoid confusing import failures when a module lists nested dependencies (for example, `tcs.utils` requiring `tcs.core`).
 
 Behavior summary:
 - The workflow resolves the manifest path and reads the `RequiredModules` entry.
