@@ -170,6 +170,8 @@ jobs:
 
           Write-Host 'Generating markdown help...' -ForegroundColor Green
           New-MarkdownHelp -Module $env:MODULE_NAME -OutputFolder $env:DOCS_PATH -Force
+          $aboutPath = Join-Path $env:DOCS_PATH "about_$env:MODULE_NAME.md"
+          if (Test-Path $aboutPath) { Remove-Item $aboutPath -Force }
           New-MarkdownAboutHelp -OutputFolder $env:DOCS_PATH -AboutName $env:MODULE_NAME
 
 
