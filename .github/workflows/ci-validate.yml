@@ -105,7 +105,7 @@ jobs:
           }
 
       - name: Resolve RequiredModules
-        uses: ./.github/actions/resolve-required-modules
+        uses: ntatschner/tcs-shared-workflows/.github/actions/resolve-required-modules@main
         with:
           module-manifest: ${{ env.MODULE_MANIFEST }}
 
