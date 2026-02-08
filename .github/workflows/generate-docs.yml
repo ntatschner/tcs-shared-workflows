@@ -308,35 +308,29 @@ jobs:
               # Fix inline YAML (```yaml Type: String[] on same line)
               $text = [regex]::Replace($text, '(?m)^```yaml[ \t]+(.+)$', { param($m) '```yaml' + [Environment]::NewLine + $m.Groups[1].Value })
               
-              # Aggressively fix cramped YAML blocks
+              # Aggressively fix cramped YAML blocks (use vars for replacement strings so commas do not break -replace)
+              $nl = [Environment]::NewLine
+              $replDefaultNone = 'Default value: None' + $nl + 'Accept pipeline input: False'
+              $replInputFalse = 'Accept pipeline input: False' + $nl + 'Accept wildcard characters: False'
+              $replInputTrue = 'Accept pipeline input: True (ByPropertyName, ByValue)' + $nl + 'Accept wildcard characters: False'
               $pattern = '(?ms)```yaml\s*(.+?)\s*```'
               $matches = [regex]::Matches($text, $pattern)
               if ($matches.Count -gt 0) {
                 $offset = 0
                 foreach ($m in $matches) {
                   $inner = $m.Groups[1].Value
-                  # Split on any uppercase letter followed by text and colon that appears after whitespace
-                  # But avoid splitting "Parameter Sets" so "Sets" does not become a standalone key
-                  $fixed = $inner -replace '(\S)\s+([A-Z][a-zA-Z0-9\s]*:)', ('$1' + [Environment]::NewLine + '$2')
-                  # Merge "Parameter" + newline + "Sets:" into "Parameter Sets:" (PlatyPS expects this key, not "Sets")
+                  $fixed = $inner -replace '(\S)\s+([A-Z][a-zA-Z0-9\s]*:)', ('$1' + $nl + '$2')
                   $fixed = $fixed -replace 'Parameter\r?\nSets: ', 'Parameter Sets: '
-                  # Remove stray "Parameter" stuck to Type line (e.g. "Type: String[]Parameter" -> "Type: String[]", "Type: SwitchParameterParameter" -> "Type: SwitchParameter")
                   $fixed = $fixed -replace '(?m)^(Type:\s*.+?)Parameter\s*$', '$1'
-                  # Fix concatenated keys: "Position: 1Default" -> "Position: 1" + newline + "Default value: None"
-                  $fixed = $fixed -replace '(?m)^(Position:\s*[^\r\n]+?)Default\s*$', "`$1" + [Environment]::NewLine + 'Default value: None'
-                  # "value:NoneAcceptpipeline" -> "Default value: None" + newline + "Accept pipeline input: False"
-                  $fixed = $fixed -replace 'value:NoneAcceptpipeline', ('Default value: None' + [Environment]::NewLine + 'Accept pipeline input: False')
-                  $fixed = $fixed -replace 'value: NoneAcceptpipeline', ('Default value: None' + [Environment]::NewLine + 'Accept pipeline input: False')
-                  # "input:FalseAcceptwildcard" or "input: True (...)" -> "Accept pipeline input: ..." + newline + "Accept wildcard characters: False"
-                  $fixed = $fixed -replace 'input:FalseAcceptwildcard', ('Accept pipeline input: False' + [Environment]::NewLine + 'Accept wildcard characters: False')
-                  $fixed = $fixed -replace 'input: True \([^)]+\)Acceptwildcard', ('Accept pipeline input: True (ByPropertyName, ByValue)' + [Environment]::NewLine + 'Accept wildcard characters: False')
-                  # Standalone "characters: False" -> "Accept wildcard characters: False"
+                  $fixed = $fixed -replace '(?m)^(Position:\s*[^\r\n]+?)Default\s*$', "`$1" + $nl + 'Default value: None'
+                  $fixed = $fixed -replace 'value:NoneAcceptpipeline', $replDefaultNone
+                  $fixed = $fixed -replace 'value: NoneAcceptpipeline', $replDefaultNone
+                  $fixed = $fixed -replace 'input:FalseAcceptwildcard', $replInputFalse
+                  $fixed = $fixed -replace 'input: True \([^)]+\)Acceptwildcard', $replInputTrue
                   $fixed = $fixed -replace '(?m)^characters:\s*False\s*$', 'Accept wildcard characters: False'
-                  # "Position:NamedDefault" or "Position: NamedDefault" -> "Position: Named" + newline + "Default value: None"
-                  $fixed = $fixed -replace '(?m)^(Position:\s*Named)Default\s*$', "`$1" + [Environment]::NewLine + 'Default value: None'
-                  # "Required:True" / "Required:False" -> "Required: True" / "Required: False" (space after colon for consistency)
+                  $fixed = $fixed -replace '(?m)^(Position:\s*Named)Default\s*$', "`$1" + $nl + 'Default value: None'
                   $fixed = $fixed -replace '(?m)^Required:(True|False)\s*$', 'Required: $1'
-                  $newBlock = '```yaml' + [Environment]::NewLine + $fixed + [Environment]::NewLine + '```'
+                  $newBlock = '```yaml' + $nl + $fixed + $nl + '```'
                   $startIndex = $m.Index + $offset
                   $length = $m.Length
                   $text = $text.Substring(0, $startIndex) + $newBlock + $text.Substring($startIndex + $length)
