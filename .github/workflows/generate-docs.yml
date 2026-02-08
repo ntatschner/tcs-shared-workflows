@@ -342,6 +342,7 @@ jobs:
               $replCharacters = 'Accept wildcard characters: False'
               $replRequired = 'Required: $1'
               $replDefaultFalse = 'Default value: False' + $nl + 'Accept pipeline input: False'
+              $replValueToDefault = 'Default value: $1' + $nl + 'Accept pipeline input: False'
               $replNewlineParamSets = "`$1" + $nl + 'Parameter Sets: '
               $pattern = '(?ms)```yaml\s*(.+?)\s*```'
               $matches = [regex]::Matches($text, $pattern)
@@ -359,6 +360,8 @@ jobs:
                   $fixed = $fixed -replace 'value: NoneAcceptpipeline', $replDefaultNone
                   $fixed = $fixed -replace 'value:FalseAcceptpipeline', $replDefaultFalse
                   $fixed = $fixed -replace 'value: FalseAcceptpipeline', $replDefaultFalse
+                  $fixed = $fixed -replace '(?m)^value:\s*(.+?)Acceptpipeline\s*$', $replValueToDefault
+                  $fixed = $fixed -replace '(?m)^value:\s*(.+)\s*$', 'Default value: $1'
                   $fixed = $fixed -replace 'input:FalseAcceptwildcard', $replInputFalse
                   $fixed = $fixed -replace 'input: True \([^)]+\)Acceptwildcard', $replInputTrue
                   $fixed = $fixed -replace '(?m)^characters:\s*False\s*$', $replCharacters
