@@ -77,36 +77,46 @@ jobs:
           Write-Host "Manifest version: $manifestVersion" -ForegroundColor Cyan
 
           $prefix = $env:TAG_PREFIX.Trim()
-          $tags = git tag -l "${prefix}*" --sort=-v:refname 2>$null
-          $latestTag = if ($tags) { $tags | Select-Object -First 1 } else { $null }
+          $newTag = "${prefix}${manifestVersion}"
+
+          # Check remote first: if this tag already exists on origin, skip (no local state dependency)
+          $remoteRef = git ls-remote origin "refs/tags/$newTag" 2>$null
+          if ($remoteRef) {
+            Write-Host "Tag $newTag already exists on remote. Skipping." -ForegroundColor Yellow
+            "tag_created=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+            "new_tag=$newTag" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+            exit 0
+          }
+
+          # List remote tags with prefix (git ls-remote outputs "SHA\tref" per line)
+          $remoteTagsRaw = git ls-remote --refs origin "refs/tags/${prefix}*" 2>$null
+          $tagNames = @($remoteTagsRaw) | ForEach-Object {
+            $ref = ($_ -split "`t", 2)[1]
+            if ($ref -and $ref -match '^refs/tags/(.+)$') { $matches[1] }
+          } | Where-Object { $_ }
           $latestVersion = $null
-          if ($latestTag) {
-            $tagOnly = $latestTag -replace "^$([regex]::Escape($prefix))", ''
+          $latestTag = $null
+          foreach ($t in $tagNames) {
+            $tagOnly = $t -replace "^$([regex]::Escape($prefix))", ''
             $tryVer = $null
             if ([version]::TryParse($tagOnly, [ref]$tryVer)) {
-              $latestVersion = $tryVer
-              Write-Host "Latest tag: $latestTag (version $tagOnly)" -ForegroundColor Cyan
-            }
-            else {
-              Write-Host "Latest tag '$latestTag' could not be parsed as version; treating as no previous tag." -ForegroundColor Yellow
+              if (-not $latestVersion -or $tryVer -gt $latestVersion) {
+                $latestVersion = $tryVer
+                $latestTag = $t
+              }
             }
           }
-          if (-not $latestVersion) {
-            Write-Host "No previous version tag found. Creating first tag." -ForegroundColor Yellow
+          if ($latestTag) {
+            Write-Host "Latest tag on remote: $latestTag (version $($latestVersion.ToString()))" -ForegroundColor Cyan
+          }
+          else {
+            Write-Host "No previous version tag found on remote. Creating first tag." -ForegroundColor Yellow
           }
 
           if ($latestVersion -and $manifestVer -le $latestVersion) {
             Write-Host "Manifest version $manifestVersion is not greater than latest tag ($latestTag). No tag created." -ForegroundColor Yellow
             "tag_created=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
             "new_tag=" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-            exit 0
-          }
-
-          $newTag = "${prefix}${manifestVersion}"
-          if (git rev-parse "refs/tags/$newTag" 2>$null) {
-            Write-Host "Tag $newTag already exists. Skipping." -ForegroundColor Yellow
-            "tag_created=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-            "new_tag=$newTag" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
             exit 0
           }
 
