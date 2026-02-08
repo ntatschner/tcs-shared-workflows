@@ -54,6 +54,12 @@ jobs:
           fetch-depth: 0
           token: ${{ env.REPO_TOKEN }}
 
+      - name: Fetch tags from origin
+        shell: bash
+        run: git fetch origin --tags --force
+        env:
+          GITHUB_TOKEN: ${{ env.REPO_TOKEN }}
+
       - name: Get manifest version and latest tag, create tag if increased
         id: tag
         shell: pwsh
