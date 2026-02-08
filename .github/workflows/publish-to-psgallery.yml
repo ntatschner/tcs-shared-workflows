@@ -77,10 +77,10 @@ jobs:
         env:
           MODULE_MANIFEST: ${{ env.MODULE_MANIFEST }}
         run: |
+          $ErrorActionPreference = 'Stop'
           if (-not (Test-Path $env:MODULE_MANIFEST)) {
             throw "Module manifest not found at path: $env:MODULE_MANIFEST"
           }
-
           $manifest = Test-ModuleManifest -Path $env:MODULE_MANIFEST -ErrorAction Stop
           Write-Host "✅ Manifest for $($manifest.Name) v$($manifest.Version) is valid." -ForegroundColor Green
 
@@ -90,10 +90,10 @@ jobs:
         env:
           MODULE_MANIFEST: ${{ env.MODULE_MANIFEST }}
         run: |
+          $ErrorActionPreference = 'Stop'
           if (-not (Test-Path $env:MODULE_MANIFEST)) {
             throw "Module manifest not found at path: $env:MODULE_MANIFEST"
           }
-
           $manifest = Import-PowerShellDataFile -Path $env:MODULE_MANIFEST
           $version = $manifest.ModuleVersion
           if (-not $version) {
@@ -109,6 +109,7 @@ jobs:
         env:
           MODULE_PATH: ${{ env.MODULE_PATH }}
         run: |
+          $ErrorActionPreference = 'Stop'
           $results = Invoke-ScriptAnalyzer -Path $env:MODULE_PATH -Recurse -Severity Warning,Error
           if ($results) {
             Write-Host 'PSScriptAnalyzer findings:' -ForegroundColor Yellow
@@ -142,12 +143,13 @@ jobs:
           MODULE_MANIFEST: ${{ env.MODULE_MANIFEST }}
           MODULE_NAME: ${{ env.MODULE_NAME }}
         run: |
+          $ErrorActionPreference = 'Stop'
           try {
             $resolvedManifestPath = Resolve-Path -Path $env:MODULE_MANIFEST -ErrorAction Stop
-
             Import-Module -Name $resolvedManifestPath -Force -ErrorAction Stop
-            Write-Host "✅ Module '$env:MODULE_NAME' imports successfully." -ForegroundColor Green
             $module = Get-Module $env:MODULE_NAME
+            if (-not $module) { throw "Module '$env:MODULE_NAME' did not load." }
+            Write-Host "✅ Module '$env:MODULE_NAME' imports successfully." -ForegroundColor Green
             Write-Host "Exports: $($module.ExportedFunctions.Keys -join ', ')" -ForegroundColor Cyan
           }
           finally {
@@ -162,6 +164,7 @@ jobs:
           MODULE_VERSION: ${{ steps.get-version.outputs.module_version }}
           FORCE_PUBLISH: ${{ env.FORCE_PUBLISH }}
         run: |
+          $ErrorActionPreference = 'Stop'
           $forcePublish = [System.Convert]::ToBoolean($env:FORCE_PUBLISH)
           $existingModule = $null
 
@@ -222,6 +225,7 @@ jobs:
           MODULE_MANIFEST: ${{ env.MODULE_MANIFEST }}
           PSGALLERY_API_KEY: ${{ env.PSGALLERY_API_KEY }}
         run: |
+          $ErrorActionPreference = 'Stop'
           if (-not $env:PSGALLERY_API_KEY) {
             throw 'PowerShell Gallery API key was not provided.'
           }
@@ -294,7 +298,7 @@ jobs:
     name: Publish Summary
     runs-on: windows-latest
     needs: [validate, publish]
-    if: always()
+    if: always() && (needs.validate.result != 'cancelled' || needs.publish.result != 'cancelled')
     env:
       SHOULD_PUBLISH: ${{ needs.validate.outputs.should_publish }}
       VALIDATE_RESULT: ${{ needs.validate.result }}
@@ -302,22 +306,32 @@ jobs:
       MODULE_NAME: ${{ inputs.module-name }}
       MODULE_VERSION: ${{ needs.validate.outputs.module_version }}
     steps:
-      - name: Summarize Workflow
+      - name: Summarize and fail if validation or publish failed
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
           Write-Host "Validation job result: $env:VALIDATE_RESULT" -ForegroundColor Cyan
-          if ($env:SHOULD_PUBLISH -ne 'true') {
-            Write-Host 'Publish skipped because version already exists (use force-publish to override).' -ForegroundColor Yellow
-            return
+          Write-Host "Publish job result: $env:PUBLISH_RESULT" -ForegroundColor Cyan
+
+          if ($env:VALIDATE_RESULT -eq 'failure') {
+            Write-Host '❌ Validation failed. Workflow did not succeed.' -ForegroundColor Red
+            exit 1
           }
 
-          Write-Host "Publish job result: $env:PUBLISH_RESULT" -ForegroundColor Cyan
+          if ($env:SHOULD_PUBLISH -ne 'true') {
+            Write-Host 'Publish skipped because version already exists (use force-publish to override).' -ForegroundColor Yellow
+            exit 0
+          }
+
           if ($env:PUBLISH_RESULT -eq 'success') {
             Write-Host "🎉 Successfully published $env:MODULE_NAME v$env:MODULE_VERSION to PowerShell Gallery." -ForegroundColor Green
+            exit 0
           }
-          elseif ($env:PUBLISH_RESULT -eq 'skipped') {
-            Write-Host 'Publish step was skipped. Check preceding jobs for issues.' -ForegroundColor Yellow
+
+          if ($env:PUBLISH_RESULT -eq 'skipped') {
+            Write-Host '❌ Publish job was skipped. Check preceding jobs for issues.' -ForegroundColor Red
+            exit 1
           }
-          else {
-            Write-Host '❌ Publish step failed. Review logs for details.' -ForegroundColor Red
-          }
+
+          Write-Host '❌ Publish failed. Review logs for details.' -ForegroundColor Red
+          exit 1

@@ -48,6 +48,7 @@ jobs:
         env:
           INSTALL_MODULES: ${{ inputs.install-modules }}
         run: |
+          $ErrorActionPreference = 'Stop'
           Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction SilentlyContinue
           Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser -AllowClobber
 
@@ -187,11 +188,12 @@ jobs:
         if: always()
         shell: pwsh
         run: |
+          $ErrorActionPreference = 'Stop'
           $jobStatus = '${{ job.status }}'
           Write-Host "`n=== Validation Complete ===" -ForegroundColor Cyan
           if ($jobStatus -eq 'success') {
             Write-Host '✅ All validation checks passed.' -ForegroundColor Green
+            exit 0
           }
-          else {
-            Write-Host '❌ One or more validation checks failed. Review the log output above for details.' -ForegroundColor Red
-          }
+          Write-Host '❌ One or more validation checks failed. Review the log output above for details.' -ForegroundColor Red
+          exit 1

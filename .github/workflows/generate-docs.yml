@@ -160,6 +160,7 @@ jobs:
           MODULE_NAME: ${{ env.MODULE_NAME }}
           DOCS_PATH: ${{ env.DOCS_PATH }}
         run: |
+          $ErrorActionPreference = 'Stop'
           Import-Module PlatyPS -Force
           $resolvedManifestPath = Resolve-Path -Path $env:MODULE_MANIFEST -ErrorAction Stop
           Import-Module -Name $resolvedManifestPath -Force
@@ -288,6 +289,7 @@ jobs:
           MODULE_PATH: ${{ env.MODULE_PATH }}
           DOCS_LOCALE: ${{ env.DOCS_LOCALE }}
         run: |
+          $ErrorActionPreference = 'Stop'
           Import-Module PlatyPS -Force
 
           # Final normalization pass right before generating external help
@@ -394,9 +396,9 @@ jobs:
           GIT_USER_NAME: ${{ env.GIT_USER_NAME != '' && env.GIT_USER_NAME || 'github-actions[bot]' }}
           GIT_USER_EMAIL: ${{ env.GIT_USER_EMAIL != '' && env.GIT_USER_EMAIL || 'github-actions[bot]@users.noreply.github.com' }}
         run: |
+          $ErrorActionPreference = 'Stop'
           git config user.name "$env:GIT_USER_NAME"
           git config user.email "$env:GIT_USER_EMAIL"
-
           git pull --rebase
 
           git add $env:DOCS_PATH
