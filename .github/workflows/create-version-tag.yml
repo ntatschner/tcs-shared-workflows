@@ -22,6 +22,10 @@ on:
         required: false
         type: string
         default: 'v'
+      ref:
+        description: 'Optional ref (commit SHA, branch, or tag) to checkout. Use workflow_run.head_sha when chained after CI Validate.'
+        required: false
+        type: string
     secrets:
       repo-token:
         description: 'Token with contents: write (to push tags). Defaults to GITHUB_TOKEN.'
@@ -46,6 +50,7 @@ jobs:
       - name: Checkout (fetch all tags)
         uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.ref || github.ref }}
           fetch-depth: 0
           token: ${{ env.REPO_TOKEN }}
 

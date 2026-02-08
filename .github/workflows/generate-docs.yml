@@ -51,6 +51,10 @@ on:
         required: false
         type: string
         default: 'docs: auto-generated PowerShell help [skip ci]'
+      ref:
+        description: 'Optional ref (commit SHA, branch, or tag) to checkout. Use workflow_run.head_sha when chained after CI Validate.'
+        required: false
+        type: string
     secrets:
       repo-token:
         description: 'Optional token with contents: write permissions. Defaults to the calling workflow GITHUB_TOKEN when omitted.'
@@ -83,6 +87,7 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.ref || github.ref }}
           fetch-depth: 0
           token: ${{ env.REPO_TOKEN }}
 
