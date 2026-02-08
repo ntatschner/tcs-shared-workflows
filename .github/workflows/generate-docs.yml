@@ -100,6 +100,8 @@ jobs:
           git config user.name "$env:GIT_USER_NAME"
           git config user.email "$env:GIT_USER_EMAIL"
           git config core.autocrlf false
+          # Reset working tree so pull --rebase does not see checkout-induced changes (e.g. line endings on Windows)
+          git reset --hard HEAD
           if (git symbolic-ref -q HEAD) { git pull --rebase }
 
       - name: Cache PowerShell Modules
