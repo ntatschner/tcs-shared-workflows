@@ -333,6 +333,8 @@ jobs:
               $replPositionDefault = "`$1" + $nl + 'Default value: None'
               $replCharacters = 'Accept wildcard characters: False'
               $replRequired = 'Required: $1'
+              $replDefaultFalse = 'Default value: False' + $nl + 'Accept pipeline input: False'
+              $replNewlineParamSets = "`$1" + $nl + 'Parameter Sets: '
               $pattern = '(?ms)```yaml\s*(.+?)\s*```'
               $matches = [regex]::Matches($text, $pattern)
               if ($matches.Count -gt 0) {
@@ -343,14 +345,22 @@ jobs:
                   $fixed = $fixed -replace 'Parameter\r?\nSets: ', $replParamSets
                   $fixed = $fixed -replace '(?m)^Sets:\s*', $replParamSets
                   $fixed = $fixed -replace '(?m)^(Type:\s*.+?)Parameter\s*$', $replTypeParam
+                  $fixed = $fixed -replace '([^\r\n])Parameter Sets:', $replNewlineParamSets
                   $fixed = $fixed -replace '(?m)^(Position:\s*[^\r\n]+?)Default\s*$', $replPositionDefault
                   $fixed = $fixed -replace 'value:NoneAcceptpipeline', $replDefaultNone
                   $fixed = $fixed -replace 'value: NoneAcceptpipeline', $replDefaultNone
+                  $fixed = $fixed -replace 'value:FalseAcceptpipeline', $replDefaultFalse
+                  $fixed = $fixed -replace 'value: FalseAcceptpipeline', $replDefaultFalse
                   $fixed = $fixed -replace 'input:FalseAcceptwildcard', $replInputFalse
                   $fixed = $fixed -replace 'input: True \([^)]+\)Acceptwildcard', $replInputTrue
                   $fixed = $fixed -replace '(?m)^characters:\s*False\s*$', $replCharacters
                   $fixed = $fixed -replace '(?m)^(Position:\s*Named)Default\s*$', $replPositionDefault
                   $fixed = $fixed -replace '(?m)^Required:(True|False)\s*$', $replRequired
+                  $fixed = [regex]::Replace($fixed, '(?s)value: @\((.*?)\)Acceptpipeline', {
+                    param($match)
+                    $inner = $match.Groups[1].Value -replace '\r\n\s*', ' '
+                    'Default value: @(' + $inner + ')' + $nl + 'Accept pipeline input: False'
+                  })
                   $newBlock = '```yaml' + $nl + $fixed + $nl + '```'
                   $startIndex = $m.Index + $offset
                   $length = $m.Length
