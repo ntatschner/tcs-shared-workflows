@@ -321,28 +321,36 @@ jobs:
               # Fix inline YAML (```yaml Type: String[] on same line)
               $text = [regex]::Replace($text, '(?m)^```yaml[ \t]+(.+)$', { param($m) '```yaml' + [Environment]::NewLine + $m.Groups[1].Value })
               
-              # Aggressively fix cramped YAML blocks (use vars for replacement strings so commas do not break -replace)
+              # Aggressively fix cramped YAML blocks (all replacement strings in vars so commas never break -replace)
               $nl = [Environment]::NewLine
               $replDefaultNone = 'Default value: None' + $nl + 'Accept pipeline input: False'
               $replInputFalse = 'Accept pipeline input: False' + $nl + 'Accept wildcard characters: False'
-              $replInputTrue = 'Accept pipeline input: True (ByPropertyName, ByValue)' + $nl + 'Accept wildcard characters: False'
+              $byPropByVal = 'ByPropertyName' + ',' + ' ByValue'
+              $replInputTrue = 'Accept pipeline input: True (' + $byPropByVal + ')' + $nl + 'Accept wildcard characters: False'
+              $replParamSets = 'Parameter Sets: '
+              $replFirstGroup = '$1' + $nl + '$2'
+              $replTypeParam = '$1'
+              $replPositionDefault = "`$1" + $nl + 'Default value: None'
+              $replCharacters = 'Accept wildcard characters: False'
+              $replRequired = 'Required: $1'
               $pattern = '(?ms)```yaml\s*(.+?)\s*```'
               $matches = [regex]::Matches($text, $pattern)
               if ($matches.Count -gt 0) {
                 $offset = 0
                 foreach ($m in $matches) {
                   $inner = $m.Groups[1].Value
-                  $fixed = $inner -replace '(\S)\s+([A-Z][a-zA-Z0-9\s]*:)', ('$1' + $nl + '$2')
-                  $fixed = $fixed -replace 'Parameter\r?\nSets: ', 'Parameter Sets: '
-                  $fixed = $fixed -replace '(?m)^(Type:\s*.+?)Parameter\s*$', '$1'
-                  $fixed = $fixed -replace '(?m)^(Position:\s*[^\r\n]+?)Default\s*$', "`$1" + $nl + 'Default value: None'
+                  $fixed = $inner -replace '(\S)\s+([A-Z][a-zA-Z0-9\s]*:)', $replFirstGroup
+                  $fixed = $fixed -replace 'Parameter\r?\nSets: ', $replParamSets
+                  $fixed = $fixed -replace '(?m)^Sets:\s*', $replParamSets
+                  $fixed = $fixed -replace '(?m)^(Type:\s*.+?)Parameter\s*$', $replTypeParam
+                  $fixed = $fixed -replace '(?m)^(Position:\s*[^\r\n]+?)Default\s*$', $replPositionDefault
                   $fixed = $fixed -replace 'value:NoneAcceptpipeline', $replDefaultNone
                   $fixed = $fixed -replace 'value: NoneAcceptpipeline', $replDefaultNone
                   $fixed = $fixed -replace 'input:FalseAcceptwildcard', $replInputFalse
                   $fixed = $fixed -replace 'input: True \([^)]+\)Acceptwildcard', $replInputTrue
-                  $fixed = $fixed -replace '(?m)^characters:\s*False\s*$', 'Accept wildcard characters: False'
-                  $fixed = $fixed -replace '(?m)^(Position:\s*Named)Default\s*$', "`$1" + $nl + 'Default value: None'
-                  $fixed = $fixed -replace '(?m)^Required:(True|False)\s*$', 'Required: $1'
+                  $fixed = $fixed -replace '(?m)^characters:\s*False\s*$', $replCharacters
+                  $fixed = $fixed -replace '(?m)^(Position:\s*Named)Default\s*$', $replPositionDefault
+                  $fixed = $fixed -replace '(?m)^Required:(True|False)\s*$', $replRequired
                   $newBlock = '```yaml' + $nl + $fixed + $nl + '```'
                   $startIndex = $m.Index + $offset
                   $length = $m.Length
