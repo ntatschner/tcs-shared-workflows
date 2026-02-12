@@ -274,18 +274,21 @@ jobs:
                       $newInner = [regex]::Replace($inner, '(:\s*[^:\r\n]+?)\s{2,}(?=[A-Z][a-zA-Z\s]+:)', '$1' + [Environment]::NewLine)
                     }
                     # Fix YAML keys so Update-MarkdownHelpModule and New-ExternalHelp accept the block (unknown key "Sets" -> "Parameter Sets", strip trailing "Parameter" from Type, "value" -> "Default value")
+                    # Pre-compute all replacement strings in variables so concatenation with commas never breaks -replace
                     $nl = [Environment]::NewLine
+                    $replNewlineParamSets = "`$1" + $nl + 'Parameter Sets: '
+                    $replDefNone = 'Default value: None' + $nl + 'Accept pipeline input: False'
+                    $replDefFalse = 'Default value: False' + $nl + 'Accept pipeline input: False'
+                    $replValueToDefault = 'Default value: $1' + $nl + 'Accept pipeline input: False'
                     $newInner = $newInner -replace 'Parameter\r?\nSets: ', 'Parameter Sets: '
                     $newInner = $newInner -replace '(?m)^Sets:\s*', 'Parameter Sets: '
                     $newInner = $newInner -replace '(?m)^(Type:\s*.+?)Parameter\s*$', '$1'
-                    $newInner = $newInner -replace '([^\r\n])Parameter Sets:', "`$1" + $nl + 'Parameter Sets: '
-                    $replDefNone = 'Default value: None' + $nl + 'Accept pipeline input: False'
-                    $replDefFalse = 'Default value: False' + $nl + 'Accept pipeline input: False'
+                    $newInner = $newInner -replace '([^\r\n])Parameter Sets:', $replNewlineParamSets
                     $newInner = $newInner -replace 'value:NoneAcceptpipeline', $replDefNone
                     $newInner = $newInner -replace 'value: NoneAcceptpipeline', $replDefNone
                     $newInner = $newInner -replace 'value:FalseAcceptpipeline', $replDefFalse
                     $newInner = $newInner -replace 'value: FalseAcceptpipeline', $replDefFalse
-                    $newInner = $newInner -replace '(?m)^value:\s*(.+?)Acceptpipeline\s*$', 'Default value: $1' + $nl + 'Accept pipeline input: False'
+                    $newInner = $newInner -replace '(?m)^value:\s*(.+?)Acceptpipeline\s*$', $replValueToDefault
                     $newInner = $newInner -replace '(?m)^value:\s*(.+)\s*$', 'Default value: $1'
                     $newBlock = '```yaml' + [Environment]::NewLine + $newInner + [Environment]::NewLine + '```'
                     $startIndex = $m.Index + $offset
