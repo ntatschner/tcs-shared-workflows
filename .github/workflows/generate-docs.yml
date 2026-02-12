@@ -103,6 +103,8 @@ jobs:
           # Reset working tree so rebase does not see checkout-induced changes (e.g. line endings on Windows)
           git reset --hard HEAD
           $branch = git symbolic-ref -q --short HEAD
+          # Reset LASTEXITCODE so detached-HEAD (exit 1 from symbolic-ref -q) does not propagate to pwsh exit code
+          $global:LASTEXITCODE = 0
           if ($branch) {
             git fetch origin $branch
             if ($LASTEXITCODE -ne 0) { throw "git fetch failed (exit code $LASTEXITCODE)" }
