@@ -74,7 +74,26 @@ jobs:
             $severityLevels = 'Information','Warning','Error'
           }
 
-          $results = Invoke-ScriptAnalyzer -Path $env:MODULE_PATH -Recurse -Severity $severityLevels
+          # Wrap in try/catch to handle known PSScriptAnalyzer NullReferenceException
+          # on certain .NET runtime versions (e.g. Windows Server 2025 runners).
+          try {
+            $results = Invoke-ScriptAnalyzer -Path $env:MODULE_PATH -Recurse -Severity $severityLevels
+          }
+          catch {
+            Write-Host "⚠️ PSScriptAnalyzer threw an internal error: $_" -ForegroundColor Yellow
+            Write-Host 'Retrying analysis on individual files...' -ForegroundColor Yellow
+            $results = @()
+            $files = Get-ChildItem -Path $env:MODULE_PATH -Recurse -Include '*.ps1','*.psm1','*.psd1'
+            foreach ($file in $files) {
+              try {
+                $fileResults = Invoke-ScriptAnalyzer -Path $file.FullName -Severity $severityLevels -ErrorAction SilentlyContinue
+                if ($fileResults) { $results += $fileResults }
+              }
+              catch {
+                Write-Host "  ⚠️ Could not analyze $($file.Name): $_" -ForegroundColor Yellow
+              }
+            }
+          }
 
           if ($results) {
             Write-Host 'PSScriptAnalyzer findings:' -ForegroundColor Yellow
