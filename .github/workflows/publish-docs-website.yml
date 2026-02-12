@@ -54,10 +54,12 @@ jobs:
   publish-docs:
     name: Publish Documentation to Website
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       published: ${{ steps.publish.outputs.published }}
       docs_url: ${{ steps.publish.outputs.docs_url }}
-    
+
     steps:
     - name: Checkout Repository
       uses: actions/checkout@v4
@@ -65,113 +67,138 @@ jobs:
     - name: Validate Documentation Path
       id: validate
       shell: bash
+      env:
+        DOCS_PATH: ${{ inputs.docs_path }}
+        DOCS_FORMAT: ${{ inputs.docs_format }}
       run: |
-        DOCS_PATH="${{ inputs.docs_path }}"
-        
         echo "Checking documentation path: $DOCS_PATH"
-        
+
         if [ ! -d "$DOCS_PATH" ]; then
-          echo "❌ Documentation path does not exist: $DOCS_PATH"
+          echo "Documentation path does not exist: $DOCS_PATH"
           exit 1
         fi
-        
+
         # Count documentation files
-        if [ "${{ inputs.docs_format }}" = "markdown" ]; then
+        if [ "$DOCS_FORMAT" = "markdown" ]; then
           DOC_COUNT=$(find "$DOCS_PATH" -name "*.md" | wc -l)
           FILE_PATTERN="*.md"
-        elif [ "${{ inputs.docs_format }}" = "html" ]; then
+        elif [ "$DOCS_FORMAT" = "html" ]; then
           DOC_COUNT=$(find "$DOCS_PATH" -name "*.html" | wc -l)
           FILE_PATTERN="*.html"
-        elif [ "${{ inputs.docs_format }}" = "json" ]; then
+        elif [ "$DOCS_FORMAT" = "json" ]; then
           DOC_COUNT=$(find "$DOCS_PATH" -name "*.json" | wc -l)
           FILE_PATTERN="*.json"
         else
           DOC_COUNT=$(find "$DOCS_PATH" -type f | wc -l)
           FILE_PATTERN="*"
         fi
-        
+
         echo "Found $DOC_COUNT documentation files ($FILE_PATTERN)"
-        
+
         if [ $DOC_COUNT -eq 0 ]; then
-          echo "❌ No documentation files found in $DOCS_PATH"
+          echo "No documentation files found in $DOCS_PATH"
           exit 1
         fi
-        
-        echo "✅ Documentation validation passed"
-        echo "doc_count=$DOC_COUNT" >> $GITHUB_OUTPUT
+
+        echo "Documentation validation passed"
+        echo "doc_count=$DOC_COUNT" >> "$GITHUB_OUTPUT"
 
     - name: Prepare Documentation Package
       id: prepare
       shell: bash
+      env:
+        DOCS_PATH: ${{ inputs.docs_path }}
+        MODULE_NAME: ${{ inputs.module_name }}
+        DOCS_VERSION: ${{ inputs.docs_version }}
+        DOCS_FORMAT: ${{ inputs.docs_format }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        GITHUB_SHA: ${{ github.sha }}
+        GITHUB_RUN_ID: ${{ github.run_id }}
       run: |
         echo "Preparing documentation package..."
-        
-        DOCS_PATH="${{ inputs.docs_path }}"
+
         PACKAGE_DIR="docs-package"
-        
+
         # Create package directory
         mkdir -p "$PACKAGE_DIR"
-        
+
         # Copy documentation files
         cp -r "$DOCS_PATH"/* "$PACKAGE_DIR/"
-        
-        # Create metadata file
-        cat > "$PACKAGE_DIR/metadata.json" << EOF
-        {
-          "module_name": "${{ inputs.module_name }}",
-          "docs_version": "${{ inputs.docs_version }}",
-          "docs_format": "${{ inputs.docs_format }}",
-          "publish_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-          "repository": "${{ github.repository }}",
-          "commit_sha": "${{ github.sha }}",
-          "workflow_run_id": "${{ github.run_id }}"
-        }
-        EOF
-        
-        # Create file inventory
+
+        # Create metadata file using jq for proper escaping
+        jq -n \
+          --arg name "$MODULE_NAME" \
+          --arg ver "$DOCS_VERSION" \
+          --arg fmt "$DOCS_FORMAT" \
+          --arg repo "$GITHUB_REPOSITORY" \
+          --arg sha "$GITHUB_SHA" \
+          --arg run "$GITHUB_RUN_ID" \
+          '{
+            module_name: $name,
+            docs_version: $ver,
+            docs_format: $fmt,
+            publish_date: (now | strftime("%Y-%m-%dT%H:%M:%SZ")),
+            repository: $repo,
+            commit_sha: $sha,
+            workflow_run_id: $run
+          }' > "$PACKAGE_DIR/metadata.json"
+
+        # Create file inventory with correct extension mapping
         echo "Creating file inventory..."
-        find "$PACKAGE_DIR" -type f -name "*.${{ inputs.docs_format }}" > "$PACKAGE_DIR/file_inventory.txt" || \
+        case "$DOCS_FORMAT" in
+          markdown) EXT="md" ;;
+          *) EXT="$DOCS_FORMAT" ;;
+        esac
+        find "$PACKAGE_DIR" -type f -name "*.$EXT" > "$PACKAGE_DIR/file_inventory.txt" || \
         find "$PACKAGE_DIR" -type f > "$PACKAGE_DIR/file_inventory.txt"
-        
-        echo "✅ Documentation package prepared"
-        echo "package_dir=$PACKAGE_DIR" >> $GITHUB_OUTPUT
+
+        echo "Documentation package prepared"
+        echo "package_dir=$PACKAGE_DIR" >> "$GITHUB_OUTPUT"
 
     - name: Publish via API
       id: publish
       if: inputs.publish_method == 'api'
       shell: bash
+      env:
+        API_ENDPOINT: ${{ inputs.website_api_endpoint }}
+        API_KEY: ${{ secrets.WEBSITE_API_KEY }}
+        AUTH_TOKEN: ${{ secrets.WEBSITE_AUTH_TOKEN }}
+        PACKAGE_DIR: ${{ steps.prepare.outputs.package_dir }}
+        DRY_RUN: ${{ inputs.dry_run }}
+        MODULE_NAME: ${{ inputs.module_name }}
+        DOCS_VERSION: ${{ inputs.docs_version }}
+        DOCS_FORMAT: ${{ inputs.docs_format }}
+        GH_REPOSITORY: ${{ github.repository }}
+        GH_SHA: ${{ github.sha }}
       run: |
         set -eo pipefail
         echo "Publishing documentation via API..."
 
-        API_ENDPOINT="${{ inputs.website_api_endpoint }}"
-        API_KEY="${{ secrets.WEBSITE_API_KEY }}"
-        AUTH_TOKEN="${{ secrets.WEBSITE_AUTH_TOKEN }}"
-        PACKAGE_DIR="${{ steps.prepare.outputs.package_dir }}"
-        DRY_RUN="${{ inputs.dry_run }}"
-
         if [ -z "$API_KEY" ]; then
-          echo "❌ WEBSITE_API_KEY secret is required"
+          echo "WEBSITE_API_KEY secret is required"
           exit 1
         fi
 
         if [ -z "$API_ENDPOINT" ]; then
-          echo "❌ website_api_endpoint input is required"
+          echo "website_api_endpoint input is required"
           exit 1
         fi
 
         echo "Preparing API payload..."
-        PAYLOAD=$(cat << EOF
-        {
-          "module_name": "${{ inputs.module_name }}",
-          "docs_version": "${{ inputs.docs_version }}",
-          "docs_format": "${{ inputs.docs_format }}",
-          "repository": "${{ github.repository }}",
-          "commit_sha": "${{ github.sha }}",
-          "files": []
-        }
-        EOF
-        )
+        PAYLOAD=$(jq -n \
+          --arg name "$MODULE_NAME" \
+          --arg ver "$DOCS_VERSION" \
+          --arg fmt "$DOCS_FORMAT" \
+          --arg repo "$GH_REPOSITORY" \
+          --arg sha "$GH_SHA" \
+          '{
+            module_name: $name,
+            docs_version: $ver,
+            docs_format: $fmt,
+            repository: $repo,
+            commit_sha: $sha,
+            files: []
+          }')
 
         CURL_ARGS=(
           -s -w "\n%{http_code}"
@@ -186,7 +213,7 @@ jobs:
 
         if [ "$DRY_RUN" = "true" ]; then
           CURL_ARGS+=( -H "X-Dry-Run: true" )
-          echo "🔍 Performing dry run - no actual publishing will occur"
+          echo "Performing dry run - no actual publishing will occur"
         fi
 
         RESPONSE=$(curl "${CURL_ARGS[@]}" -d "$PAYLOAD" "$API_ENDPOINT" 2>&1)
@@ -199,24 +226,24 @@ jobs:
         fi
 
         if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
-          echo "✅ Documentation published successfully"
+          echo "Documentation published successfully"
 
           DOCS_URL=$(echo "$RESPONSE_BODY" | jq -r '.url // empty' 2>/dev/null || true)
           if [ -z "$DOCS_URL" ]; then
-            DOCS_URL="${API_ENDPOINT%/api/*}/docs/${{ inputs.module_name }}"
+            DOCS_URL="${API_ENDPOINT%/api/*}/docs/$MODULE_NAME"
           fi
 
-          echo "published=true" >> $GITHUB_OUTPUT
-          echo "docs_url=$DOCS_URL" >> $GITHUB_OUTPUT
+          echo "published=true" >> "$GITHUB_OUTPUT"
+          echo "docs_url=$DOCS_URL" >> "$GITHUB_OUTPUT"
 
           if [ "$DRY_RUN" = "true" ]; then
-            echo "🔍 Dry run completed successfully"
+            echo "Dry run completed successfully"
           else
-            echo "📖 Documentation available at: $DOCS_URL"
+            echo "Documentation available at: $DOCS_URL"
           fi
         else
-          echo "❌ API request failed with status $HTTP_CODE"
-          echo "published=false" >> $GITHUB_OUTPUT
+          echo "API request failed with status $HTTP_CODE"
+          echo "published=false" >> "$GITHUB_OUTPUT"
           exit 1
         fi
 
@@ -225,64 +252,78 @@ jobs:
       if: inputs.publish_method == 'git'
       shell: bash
       run: |
-        echo "🚧 Git publishing method not yet implemented"
+        echo "Git publishing method not yet implemented"
         echo "This would typically:"
         echo "1. Clone a documentation repository"
         echo "2. Update documentation files"
         echo "3. Commit and push changes"
         echo "4. Trigger website rebuild"
-        
+
         # Placeholder for git-based publishing
-        echo "published=false" >> $GITHUB_OUTPUT
-        echo "This publishing method is not yet implemented" >> $GITHUB_OUTPUT
-          exit 1
+        echo "published=false" >> "$GITHUB_OUTPUT"
+        echo "error=This publishing method is not yet implemented" >> "$GITHUB_OUTPUT"
+        exit 1
 
     - name: Publish via FTP (Alternative Method)
       id: publish_ftp
       if: inputs.publish_method == 'ftp'
       shell: bash
       run: |
-        echo "🚧 FTP publishing method not yet implemented"
+        echo "FTP publishing method not yet implemented"
         echo "This would typically:"
         echo "1. Connect to FTP server"
         echo "2. Upload documentation files"
         echo "3. Update website index"
-        
+
         # Placeholder for FTP-based publishing
-        echo "published=false" >> $GITHUB_OUTPUT
-        echo "This publishing method is not yet implemented" >> $GITHUB_OUTPUT
-          exit 1
+        echo "published=false" >> "$GITHUB_OUTPUT"
+        echo "error=This publishing method is not yet implemented" >> "$GITHUB_OUTPUT"
+        exit 1
 
     - name: Cleanup
       if: always()
       shell: bash
+      env:
+        PACKAGE_DIR: ${{ steps.prepare.outputs.package_dir }}
       run: |
         # Clean up temporary files
-        PACKAGE_DIR="${{ steps.prepare.outputs.package_dir }}"
         if [ -d "$PACKAGE_DIR" ]; then
           rm -rf "$PACKAGE_DIR"
-          echo "✅ Cleaned up temporary package directory"
+          echo "Cleaned up temporary package directory"
         fi
 
     - name: Publication Summary
       if: always()
       shell: bash
+      env:
+        MODULE_NAME: ${{ inputs.module_name }}
+        DOCS_VERSION: ${{ inputs.docs_version }}
+        DOCS_FORMAT: ${{ inputs.docs_format }}
+        PUBLISH_METHOD: ${{ inputs.publish_method }}
+        DOC_COUNT: ${{ steps.validate.outputs.doc_count }}
+        PUBLISH_API_PUBLISHED: ${{ steps.publish.outputs.published }}
+        PUBLISH_GIT_PUBLISHED: ${{ steps.publish_git.outputs.published }}
+        PUBLISH_FTP_PUBLISHED: ${{ steps.publish_ftp.outputs.published }}
+        PUBLISH_API_URL: ${{ steps.publish.outputs.docs_url }}
+        PUBLISH_GIT_URL: ${{ steps.publish_git.outputs.docs_url }}
+        PUBLISH_FTP_URL: ${{ steps.publish_ftp.outputs.docs_url }}
       run: |
-        echo "=== Documentation Publication Summary ===" 
-        echo "📄 Module: ${{ inputs.module_name }}"
-        echo "📄 Version: ${{ inputs.docs_version }}"
-        echo "📄 Format: ${{ inputs.docs_format }}"
-        echo "📄 Method: ${{ inputs.publish_method }}"
-        echo "📄 Files Found: ${{ steps.validate.outputs.doc_count }}"
-        
-        PUBLISHED="${{ steps.publish.outputs.published }}${{ steps.publish_git.outputs.published }}${{ steps.publish_ftp.outputs.published }}"
-        DOCS_URL="${{ steps.publish.outputs.docs_url }}${{ steps.publish_git.outputs.docs_url }}${{ steps.publish_ftp.outputs.docs_url }}"
-        
+        echo "=== Documentation Publication Summary ==="
+        echo "Module: $MODULE_NAME"
+        echo "Version: $DOCS_VERSION"
+        echo "Format: $DOCS_FORMAT"
+        echo "Method: $PUBLISH_METHOD"
+        echo "Files Found: $DOC_COUNT"
+
+        # Pick the non-empty value from whichever publish step actually ran
+        PUBLISHED="${PUBLISH_API_PUBLISHED:-${PUBLISH_GIT_PUBLISHED:-${PUBLISH_FTP_PUBLISHED:-}}}"
+        DOCS_URL="${PUBLISH_API_URL:-${PUBLISH_GIT_URL:-${PUBLISH_FTP_URL:-}}}"
+
         if [ "$PUBLISHED" = "true" ]; then
-          echo "✅ Status: Published successfully"
+          echo "Status: Published successfully"
           if [ -n "$DOCS_URL" ]; then
-            echo "🔗 URL: $DOCS_URL"
+            echo "URL: $DOCS_URL"
           fi
         else
-          echo "❌ Status: Publication failed or not attempted"
+          echo "Status: Publication failed or not attempted"
         fi

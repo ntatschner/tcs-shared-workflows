@@ -79,7 +79,7 @@ jobs:
       PRE_IMPORT_SCRIPT: ${{ inputs.pre-import-script-path }}
       GIT_USER_NAME: ${{ inputs.git-user-name }}
       GIT_USER_EMAIL: ${{ inputs.git-user-email }}
-      REPO_TOKEN: ${{ secrets.repo-token != '' && secrets.repo-token || secrets.GITHUB_TOKEN }}
+      REPO_TOKEN: ${{ secrets.repo-token != '' && secrets.repo-token || github.token }}
     outputs:
       docs-updated: ${{ steps.commit-docs.outputs.docs_updated }}
 
@@ -105,7 +105,12 @@ jobs:
           $branch = git symbolic-ref -q --short HEAD
           if ($branch) {
             git fetch origin $branch
+            if ($LASTEXITCODE -ne 0) { throw "git fetch failed (exit code $LASTEXITCODE)" }
             git rebase "origin/$branch"
+            if ($LASTEXITCODE -ne 0) {
+              git rebase --abort 2>$null
+              throw "git rebase failed (exit code $LASTEXITCODE) -- possible conflict with concurrent push"
+            }
           }
 
       - name: Cache PowerShell Modules
@@ -210,7 +215,8 @@ jobs:
             $resolvedManifestPath = Resolve-Path -Path $env:MODULE_MANIFEST -ErrorAction Stop
             Import-Module -Name $resolvedManifestPath -Force -ErrorAction Stop
           } catch {
-            Write-Warning "Module import failed before Update-MarkdownHelpModule: $_"
+            Write-Host "::error::Module import failed: $_"
+            throw
           }
 
           function Normalize-MarkdownHeaders {
@@ -238,10 +244,10 @@ jobs:
 
                 # Split multiple 'Key: Value' pairs that ended up on the same line inside YAML blocks
                 $pattern = '(?ms)```yaml\s*(.+?)\s*```'
-                $matches = [regex]::Matches($text, $pattern)
-                if ($matches.Count -gt 0) {
+                $yamlBlocks = [regex]::Matches($text, $pattern)
+                if ($yamlBlocks.Count -gt 0) {
                   $offset = 0
-                  foreach ($m in $matches) {
+                  foreach ($m in $yamlBlocks) {
                     $inner = $m.Groups[1].Value
                     # More aggressive splitting: split on any pattern that looks like 'Key:'
                     # This handles cases like 'Type: String[] Parameter Sets: (All)' or 'Required: True Aliases: none'
@@ -290,14 +296,12 @@ jobs:
                   # Build the regex by concatenation to avoid PowerShell parsing issues with (?m) and variable interpolation
                   $regex = '(?m)^\s*' + [regex]::Escape($label) + ':\s*-{3,}\s*$'
                   if ($text -match $regex) {
-                    $bak = $path + '.bak'
-                    Copy-Item -Path $path -Destination $bak -ErrorAction SilentlyContinue
                     $replacementLine = [Environment]::NewLine + ('### ' + $label.ToUpper()) + [Environment]::NewLine
                     $text = [regex]::Replace($text, $regex, $replacementLine)
                   }
                 }
                 if ($text -ne $orig) {
-                  Set-Content -Path $path -Value $text -Encoding UTF8
+                  Set-Content -Path $path -Value $text -Encoding UTF8 -NoNewline
                   Write-Host "Patched: $path" -ForegroundColor Green
                 }
               }
@@ -310,7 +314,7 @@ jobs:
             try {
               Update-MarkdownHelpModule -Path $env:DOCS_PATH -RefreshModulePage -ErrorAction Stop
             } catch {
-              Write-Warning "Update-MarkdownHelpModule reported an error; continuing: $_"
+              Write-Host "::warning::Update-MarkdownHelpModule failed: $_"
             }
           }
 
@@ -354,10 +358,10 @@ jobs:
               $replValueToDefault = 'Default value: $1' + $nl + 'Accept pipeline input: False'
               $replNewlineParamSets = "`$1" + $nl + 'Parameter Sets: '
               $pattern = '(?ms)```yaml\s*(.+?)\s*```'
-              $matches = [regex]::Matches($text, $pattern)
-              if ($matches.Count -gt 0) {
+              $yamlBlocks = [regex]::Matches($text, $pattern)
+              if ($yamlBlocks.Count -gt 0) {
                 $offset = 0
-                foreach ($m in $matches) {
+                foreach ($m in $yamlBlocks) {
                   $inner = $m.Groups[1].Value
                   $fixed = $inner -replace '(\S)\s+([A-Z][a-zA-Z0-9\s]*:)', $replFirstGroup
                   $fixed = $fixed -replace 'Parameter\r?\nSets: ', $replParamSets
@@ -414,22 +418,24 @@ jobs:
             # Try processing files individually to identify problematic ones
             Write-Host "Attempting to generate help for individual files..." -ForegroundColor Yellow
             $mdFiles = Get-ChildItem -Path $env:DOCS_PATH -Filter *.md -File
-            $successCount = 0
-            $failCount = 0
-            
+            $goodFiles = @()
             foreach ($file in $mdFiles) {
               try {
-                New-ExternalHelp -Path $file.FullName -OutputPath $helpPath -Force -ErrorAction Stop | Out-Null
-                $successCount++
+                $testPath = Join-Path $env:TEMP 'help-validate'
+                if (-not (Test-Path $testPath)) { New-Item -ItemType Directory -Path $testPath -Force | Out-Null }
+                New-ExternalHelp -Path $file.FullName -OutputPath $testPath -Force -ErrorAction Stop | Out-Null
+                $goodFiles += $file.FullName
               } catch {
-                Write-Warning "  ❌ Failed to process: $($file.Name) - $($_.Exception.Message)"
-                $failCount++
+                Write-Warning "Skipping problematic file: $($file.Name) - $_"
               }
             }
-            
-            Write-Host "External help generation completed with $successCount succeeded, $failCount failed." -ForegroundColor $(if ($failCount -gt 0) { 'Yellow' } else { 'Green' })
-            
-            if ($failCount -eq $mdFiles.Count) {
+            Remove-Item (Join-Path $env:TEMP 'help-validate') -Recurse -Force -ErrorAction SilentlyContinue
+            if ($goodFiles.Count -gt 0) {
+              New-ExternalHelp -Path $goodFiles -OutputPath $helpPath -Force -ErrorAction Stop | Out-Null
+              Write-Host "  Generated external help from $($goodFiles.Count) files" -ForegroundColor Green
+            }
+
+            if ($goodFiles.Count -eq 0) {
               throw "All markdown files failed to generate external help."
             }
           }
@@ -450,14 +456,15 @@ jobs:
           git add $env:DOCS_PATH
           git add (Join-Path $env:MODULE_PATH $env:DOCS_LOCALE)
 
-          $changes = git status --porcelain
-          if (-not [string]::IsNullOrWhiteSpace($changes)) {
+          $staged = git diff --cached --name-only
+          if ($staged) {
             git commit -m "$env:COMMIT_MESSAGE"
+            if ($LASTEXITCODE -ne 0) { throw "git commit failed (exit code $LASTEXITCODE)" }
             git push
+            if ($LASTEXITCODE -ne 0) { throw "git push failed (exit code $LASTEXITCODE)" }
             "docs_updated=true" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
-          }
-          else {
-            Write-Host 'No documentation changes detected.' -ForegroundColor Yellow
+          } else {
+            Write-Host "No documentation changes to commit." -ForegroundColor Yellow
             "docs_updated=false" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           }
 

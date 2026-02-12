@@ -33,6 +33,8 @@ jobs:
   validate:
     name: Validate PowerShell Module
     runs-on: windows-latest
+    permissions:
+      contents: read
     env:
       MODULE_NAME: ${{ inputs.module-name }}
       MODULE_PATH: ${{ inputs.module-path }}
@@ -170,6 +172,13 @@ jobs:
           SCRIPT_PATH: ${{ inputs.smoke-test-script-path }}
         run: |
           $resolvedPath = Join-Path (Get-Location) $env:SCRIPT_PATH
+          if (Test-Path $resolvedPath) {
+            $resolvedPath = (Resolve-Path $resolvedPath).Path
+          }
+          $workspace = (Get-Location).Path
+          if (-not $resolvedPath.StartsWith($workspace + [IO.Path]::DirectorySeparatorChar)) {
+            throw "Script path must be within the repository workspace. Resolved to: $resolvedPath"
+          }
           if (-not (Test-Path $resolvedPath)) {
             throw "Smoke test script not found at path: $resolvedPath"
           }
@@ -187,9 +196,11 @@ jobs:
       - name: Validation Summary
         if: always()
         shell: pwsh
+        env:
+          JOB_STATUS: ${{ job.status }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $jobStatus = '${{ job.status }}'
+          $jobStatus = $env:JOB_STATUS
           Write-Host "`n=== Validation Complete ===" -ForegroundColor Cyan
           if ($jobStatus -eq 'success') {
             Write-Host '✅ All validation checks passed.' -ForegroundColor Green

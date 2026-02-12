@@ -9,9 +9,11 @@ runs:
   steps:
     - name: Resolve RequiredModules
       shell: pwsh
+      env:
+        MANIFEST_PATH: ${{ inputs.module-manifest }}
       run: |
         $scriptPath = Join-Path $env:GITHUB_ACTION_PATH 'Resolve-RequiredModules.ps1'
         if (-not (Test-Path $scriptPath)) {
           throw "Resolve-RequiredModules.ps1 not found at: $scriptPath"
         }
-        & $scriptPath -ManifestPath '${{ inputs.module-manifest }}'
+        & $scriptPath -ManifestPath $env:MANIFEST_PATH

@@ -8,12 +8,8 @@ param(
 $ErrorActionPreference = 'Stop'
 $resolvedManifestPath = Resolve-Path -Path $ManifestPath -ErrorAction Stop
 
-try {
-    $manifestData = Import-PowerShellDataFile -Path $resolvedManifestPath
-    $requiredModules = $manifestData.RequiredModules
-} catch {
-    $requiredModules = $null
-}
+$manifestData = Import-PowerShellDataFile -Path $resolvedManifestPath
+$requiredModules = $manifestData.RequiredModules
 
 if (-not $requiredModules) {
     Write-Host 'No RequiredModules in manifest.' -ForegroundColor Cyan
@@ -27,10 +23,15 @@ $parent = Split-Path $resolvedManifestPath -Parent
 foreach ($req in $requiredModules) {
     $reqName = $null
     if ($req -is [string]) { $reqName = $req }
-    elseif ($req -is [hashtable] -or $req -is [psobject]) {
+    elseif ($req -is [hashtable]) {
         if ($req.ContainsKey('ModuleName')) { $reqName = $req.ModuleName }
         elseif ($req.ContainsKey('Name')) { $reqName = $req.Name }
         else { $reqName = $req.Values | Select-Object -First 1 }
+    }
+    elseif ($req -is [psobject]) {
+        $reqName = if ($req.PSObject.Properties['ModuleName']) { $req.ModuleName }
+                   elseif ($req.PSObject.Properties['Name']) { $req.Name }
+                   else { $req.PSObject.Properties | Select-Object -First 1 -ExpandProperty Value }
     }
     if (-not $reqName) { continue }
 
@@ -49,11 +50,11 @@ foreach ($req in $requiredModules) {
     }
 
     $candidates = @(
-        Join-Path $parent $reqName,
-        Join-Path $parent "$reqName\$reqName.psd1",
-        Join-Path $repoRoot $reqName,
-        Join-Path $repoRoot "modules\$reqName\$reqName.psd1",
-        Join-Path $repoRoot "modules\$reqName"
+        (Join-Path $parent $reqName)
+        (Join-Path $parent "$reqName\$reqName.psd1")
+        (Join-Path $repoRoot $reqName)
+        (Join-Path $repoRoot "modules\$reqName\$reqName.psd1")
+        (Join-Path $repoRoot "modules\$reqName")
     )
     $imported = $false
     foreach ($cand in $candidates) {
