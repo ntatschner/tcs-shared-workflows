@@ -114,6 +114,24 @@ jobs:
               throw "git rebase failed (exit code $LASTEXITCODE) -- possible conflict with concurrent push"
             }
           }
+          else {
+            # Detached HEAD (e.g. workflow_run trigger checked out a SHA).
+            # Find the remote branch that contains this commit and create a local tracking branch
+            # so that later steps (commit / push) work seamlessly.
+            $remoteBranches = git branch -r --contains HEAD --format '%(refname:short)' 2>$null |
+              Where-Object { $_ -and $_ -notmatch '/HEAD$' }
+            $global:LASTEXITCODE = 0
+            if ($remoteBranches) {
+              $target = ($remoteBranches | Select-Object -First 1) -replace '^origin/', ''
+              Write-Host "Detached HEAD detected — checking out branch '$target'." -ForegroundColor Yellow
+              git checkout -B $target HEAD
+              git branch --set-upstream-to="origin/$target" $target 2>$null
+              $global:LASTEXITCODE = 0
+            }
+            else {
+              Write-Host '::warning::Detached HEAD and no matching remote branch found. Commit step may fail.' 
+            }
+          }
 
       - name: Cache PowerShell Modules
         id: cache-modules
