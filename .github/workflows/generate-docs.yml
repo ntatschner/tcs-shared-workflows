@@ -281,18 +281,21 @@ jobs:
                 # Split multiple 'Key: Value' pairs that ended up on the same line inside YAML blocks
                 $pattern = '(?ms)```yaml\s*(.+?)\s*```'
                 $yamlBlocks = [regex]::Matches($text, $pattern)
+                $crampedPattern = '(?m)(^(?:Type|Parameter Sets|Aliases|Required|Position|Default value|Accept pipeline input|Accept wildcard characters):[^\r\n]*?[ \t](?:Type|Parameter Sets|Aliases|Required|Position|Default value|Accept pipeline input|Accept wildcard characters):)|(^Sets:)|(^input:)|(^characters:)|(value:\S)|(Acceptpipeline)|(Acceptwildcard)|(Parameter\r?\nSets:)|(^Type:\S)|(^Required:(True|False)\s*$)|(^Position:[^\r\n]*Default\s*$)'
                 if ($yamlBlocks.Count -gt 0) {
                   $offset = 0
                   foreach ($m in $yamlBlocks) {
                     $inner = $m.Groups[1].Value
+                    # Leave well-formed PlatyPS blocks (one key per line) untouched; only repair cramped or damaged ones
+                    if ($inner -notmatch $crampedPattern) { continue }
                     # More aggressive splitting: split on any pattern that looks like 'Key:'
                     # This handles cases like 'Type: String[] Parameter Sets: (All)' or 'Required: True Aliases: none'
                     $lines = @()
                     $currentLine = ''
-                    $tokens = $inner -split '(\s+(?=[A-Z][a-zA-Z\s]+:))'
+                    $tokens = $inner -split '([ \t]+(?=(?:Type|Parameter Sets|Aliases|Required|Position|Default value|Accept pipeline input|Accept wildcard characters):))'
                     foreach ($token in $tokens) {
                       if ($token -match '^\s+$') { continue }
-                      if ($currentLine -and $token -match '^[A-Z][a-zA-Z\s]+:') {
+                      if ($currentLine -and $token -match '^(?:Type|Parameter Sets|Aliases|Required|Position|Default value|Accept pipeline input|Accept wildcard characters):') {
                         $lines += $currentLine.TrimEnd()
                         $currentLine = $token.TrimStart()
                       } else {
@@ -398,11 +401,14 @@ jobs:
               $replNewlineParamSets = "`$1" + $nl + 'Parameter Sets: '
               $pattern = '(?ms)```yaml\s*(.+?)\s*```'
               $yamlBlocks = [regex]::Matches($text, $pattern)
+              $crampedPattern = '(?m)(^(?:Type|Parameter Sets|Aliases|Required|Position|Default value|Accept pipeline input|Accept wildcard characters):[^\r\n]*?[ \t](?:Type|Parameter Sets|Aliases|Required|Position|Default value|Accept pipeline input|Accept wildcard characters):)|(^Sets:)|(^input:)|(^characters:)|(value:\S)|(Acceptpipeline)|(Acceptwildcard)|(Parameter\r?\nSets:)|(^Type:\S)|(^Required:(True|False)\s*$)|(^Position:[^\r\n]*Default\s*$)'
               if ($yamlBlocks.Count -gt 0) {
                 $offset = 0
                 foreach ($m in $yamlBlocks) {
                   $inner = $m.Groups[1].Value
-                  $fixed = $inner -replace '(\S)\s+([A-Z][a-zA-Z0-9\s]*:)', $replFirstGroup
+                  # Leave well-formed PlatyPS blocks (one key per line) untouched; only repair cramped or damaged ones
+                  if ($inner -notmatch $crampedPattern) { continue }
+                  $fixed = $inner -replace '(\S)[ \t]+((?:Type|Parameter Sets|Aliases|Required|Position|Default value|Accept pipeline input|Accept wildcard characters):)', $replFirstGroup
                   $fixed = $fixed -replace 'Parameter\r?\nSets: ', $replParamSets
                   $fixed = $fixed -replace '(?m)^Sets:\s*', $replParamSets
                   $fixed = $fixed -replace '(?m)^(Type:\s*.+?)Parameter\s*$', $replTypeParam
