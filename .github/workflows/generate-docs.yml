@@ -206,6 +206,8 @@ jobs:
           MODULE_MANIFEST: ${{ env.MODULE_MANIFEST }}
           MODULE_NAME: ${{ env.MODULE_NAME }}
           DOCS_PATH: ${{ env.DOCS_PATH }}
+          MODULE_PATH: ${{ env.MODULE_PATH }}
+          DOCS_LOCALE: ${{ env.DOCS_LOCALE }}
         run: |
           $ErrorActionPreference = 'Stop'
           Import-Module PlatyPS -Force
@@ -220,7 +222,21 @@ jobs:
           New-MarkdownHelp -Module $env:MODULE_NAME -OutputFolder $env:DOCS_PATH -Force
           $aboutPath = Join-Path $env:DOCS_PATH "about_$env:MODULE_NAME.md"
           if (Test-Path $aboutPath) { Remove-Item $aboutPath -Force }
-          New-MarkdownAboutHelp -OutputFolder $env:DOCS_PATH -AboutName $env:MODULE_NAME
+
+          # Keep a hand-written about topic. New-ExternalHelp would otherwise overwrite
+          # <module>/<locale>/about_<module>.help.txt with the PlatyPS placeholder template.
+          $aboutHelpFile = Join-Path (Join-Path $env:MODULE_PATH $env:DOCS_LOCALE) "about_$env:MODULE_NAME.help.txt"
+          $isHandWritten = $false
+          if (Test-Path -LiteralPath $aboutHelpFile) {
+            $aboutText = Get-Content -LiteralPath $aboutHelpFile -Raw
+            $isHandWritten = $aboutText -notmatch 'ABOUT TOPIC NOTE:|\{\{ .* Placeholder \}\}'
+          }
+          if ($isHandWritten) {
+            Write-Host "Keeping hand-written about topic '$aboutHelpFile'; not generating a placeholder." -ForegroundColor Cyan
+          }
+          else {
+            New-MarkdownAboutHelp -OutputFolder $env:DOCS_PATH -AboutName $env:MODULE_NAME
+          }
 
 
       - name: Update Existing Markdown
