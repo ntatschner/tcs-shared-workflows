@@ -73,6 +73,11 @@ jobs:
           Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser
           Install-Module -Name Microsoft.PowerShell.PSResourceGet -Force -AllowClobber -Scope CurrentUser
 
+      - name: Resolve RequiredModules
+        uses: ntatschner/tcs-shared-workflows/.github/actions/resolve-required-modules@main
+        with:
+          module-manifest: ${{ env.MODULE_MANIFEST }}
+
       - name: Test Module Manifest
         if: env.RUN_VALIDATION == 'true'
         shell: pwsh
@@ -131,12 +136,6 @@ jobs:
           else {
             Write-Host '✅ No PSScriptAnalyzer warnings or errors detected.' -ForegroundColor Green
           }
-
-      - name: Resolve RequiredModules
-        if: env.RUN_VALIDATION == 'true'
-        uses: ntatschner/tcs-shared-workflows/.github/actions/resolve-required-modules@main
-        with:
-          module-manifest: ${{ env.MODULE_MANIFEST }}
 
       - name: Test Module Import
         if: env.RUN_VALIDATION == 'true'
@@ -217,6 +216,12 @@ jobs:
         run: |
           Install-Module -Name PowerShellGet -Force -AllowClobber -Scope CurrentUser -ErrorAction SilentlyContinue
           Install-Module -Name Microsoft.PowerShell.PSResourceGet -Force -AllowClobber -Scope CurrentUser -ErrorAction SilentlyContinue
+
+      # Test-ModuleManifest (run by Publish-PSResource/Publish-Module) fails when a RequiredModule is not installed
+      - name: Resolve RequiredModules
+        uses: ntatschner/tcs-shared-workflows/.github/actions/resolve-required-modules@main
+        with:
+          module-manifest: ${{ env.MODULE_MANIFEST }}
 
       - name: Publish Module to PSGallery
         shell: pwsh
