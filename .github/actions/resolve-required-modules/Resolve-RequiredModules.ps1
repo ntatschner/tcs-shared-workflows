@@ -20,6 +20,26 @@ $unresolved = @()
 $repoRoot = Get-Location
 $parent = Split-Path $resolvedManifestPath -Parent
 
+function Get-RequirementValue {
+    param($Requirement, [string]$Key)
+    if ($Requirement -is [hashtable]) {
+        if ($Requirement.ContainsKey($Key)) { return $Requirement[$Key] }
+        return $null
+    }
+    if ($Requirement -is [psobject] -and $Requirement.PSObject.Properties[$Key]) {
+        return $Requirement.$Key
+    }
+    return $null
+}
+
+function Test-VersionInRange {
+    param([version]$Version, $Minimum, $Required, $Maximum)
+    if ($Required) { return $Version -eq [version]$Required }
+    if ($Minimum -and $Version -lt [version]$Minimum) { return $false }
+    if ($Maximum -and $Version -gt [version]$Maximum) { return $false }
+    return $true
+}
+
 foreach ($req in $requiredModules) {
     $reqName = $null
     if ($req -is [string]) { $reqName = $req }
@@ -35,18 +55,43 @@ foreach ($req in $requiredModules) {
     }
     if (-not $reqName) { continue }
 
-    if (Get-Module -ListAvailable -Name $reqName) {
-        Write-Host "Required module '$reqName' already available." -ForegroundColor Green
+    # Honour the version the manifest asks for: a cached older copy must not count as available
+    $minimumVersion = Get-RequirementValue -Requirement $req -Key 'ModuleVersion'
+    $requiredVersion = Get-RequirementValue -Requirement $req -Key 'RequiredVersion'
+    $maximumVersion = Get-RequirementValue -Requirement $req -Key 'MaximumVersion'
+    $versionText = if ($requiredVersion) { " $requiredVersion" }
+                   elseif ($minimumVersion -and $maximumVersion) { " $minimumVersion-$maximumVersion" }
+                   elseif ($minimumVersion) { " $minimumVersion or later" }
+                   elseif ($maximumVersion) { " $maximumVersion or earlier" }
+                   else { '' }
+
+    $matching = @(Get-Module -ListAvailable -Name $reqName | Where-Object {
+            Test-VersionInRange -Version $_.Version -Minimum $minimumVersion -Required $requiredVersion -Maximum $maximumVersion
+        })
+    if ($matching.Count -gt 0) {
+        Write-Host "Required module '$reqName'$versionText already available ($($matching[0].Version))." -ForegroundColor Green
         continue
     }
 
-    Write-Host "Required module '$reqName' not found. Attempting to install from PSGallery..." -ForegroundColor Yellow
+    Write-Host "Required module '$reqName'$versionText not found. Attempting to install from PSGallery..." -ForegroundColor Yellow
+    $installParameters = @{
+        Name         = $reqName
+        Force        = $true
+        Scope        = 'CurrentUser'
+        AllowClobber = $true
+        ErrorAction  = 'Stop'
+    }
+    if ($requiredVersion) { $installParameters['RequiredVersion'] = $requiredVersion }
+    else {
+        if ($minimumVersion) { $installParameters['MinimumVersion'] = $minimumVersion }
+        if ($maximumVersion) { $installParameters['MaximumVersion'] = $maximumVersion }
+    }
     try {
-        Install-Module -Name $reqName -Force -Scope CurrentUser -AllowClobber -ErrorAction Stop
-        Write-Host "Installed '$reqName' from PSGallery." -ForegroundColor Green
+        Install-Module @installParameters
+        Write-Host "Installed '$reqName'$versionText from PSGallery." -ForegroundColor Green
         continue
     } catch {
-        Write-Host "PSGallery install failed for '$reqName'. Trying local paths." -ForegroundColor Yellow
+        Write-Host "PSGallery install failed for '$reqName'$versionText. Trying local paths." -ForegroundColor Yellow
     }
 
     $candidates = @(
