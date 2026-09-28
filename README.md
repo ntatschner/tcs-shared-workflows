@@ -39,6 +39,9 @@ Generates PlatyPS markdown help and external help files for a module:
 - Installs optional dependencies before import
 - Supports custom pre-import scripts for stubs or setup
 - Writes markdown help and about files to a configurable docs folder
+- Tidies what PlatyPS 0.14 leaves behind: drops the `-ProgressAction` parameter it documents on
+  PowerShell 7.4+, turns its escaped backticks back into inline code, and fills the module page's
+  description and header fields from the manifest and the command synopses
 - Generates localized external help and optionally commits changes
 
 **Usage:**

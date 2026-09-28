@@ -363,6 +363,78 @@ jobs:
           Normalize-MarkdownHeaders -DocsPath $env:DOCS_PATH
 
 
+      - name: Tidy Generated Markdown
+        shell: pwsh
+        env:
+          DOCS_PATH: ${{ env.DOCS_PATH }}
+          DOCS_LOCALE: ${{ env.DOCS_LOCALE }}
+          MODULE_MANIFEST: ${{ env.MODULE_MANIFEST }}
+          MODULE_NAME: ${{ env.MODULE_NAME }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # PlatyPS 0.14 leaves three things in the Markdown that should not be published:
+          # - PowerShell 7.4 made -ProgressAction a common parameter, but PlatyPS 0.14 documents it as an ordinary
+          #   one, with a "{{ Fill ProgressAction Description }}" placeholder, on every command
+          # - it escapes the backticks of inline code in help text, so `GET /x/{id}` comes out as \`GET /x/{id}\`:
+          #   shown with its backticks, and with {id} outside code, which MDX sites (Docusaurus, Astro) reject
+          # - the module page keeps "{{ ... }}" placeholders for its description and its header fields
+          $resolvedManifestPath = Resolve-Path -Path $env:MODULE_MANIFEST -ErrorAction Stop
+          $manifest = Import-PowerShellDataFile -Path $resolvedManifestPath
+          Import-Module -Name $resolvedManifestPath -Force
+
+          function Repair-InlineCode {
+            param([string]$Text)
+            # Only outside fenced blocks. Inside a span, drop the escapes PlatyPS added to punctuation (\<, \[, ...)
+            $parts = [regex]::Split($Text, '(?ms)(^```.*?^```[ \t]*$)')
+            for ($i = 0; $i -lt $parts.Count; $i += 2) {
+              $parts[$i] = [regex]::Replace($parts[$i], '\\`([^`\r\n]+?)\\`', {
+                param($m)
+                '`' + ($m.Groups[1].Value -replace '\\([^A-Za-z0-9\s])', '$1') + '`'
+              })
+            }
+            return -join $parts
+          }
+
+          $changed = 0
+          Get-ChildItem -Path $env:DOCS_PATH -Filter *.md -File | ForEach-Object {
+            $path = $_.FullName
+            $text = Get-Content -LiteralPath $path -Raw -Encoding UTF8
+            $orig = $text
+
+            # -ProgressAction: the parameter section and the syntax entry; <CommonParameters> covers it
+            $text = [regex]::Replace($text, '(?ms)^### -ProgressAction\r?\n.*?(?=^### |^## )', '')
+            $text = $text -replace '[ \t]*\[-ProgressAction\s+<ActionPreference>\]', ''
+
+            $text = Repair-InlineCode -Text $text
+
+            # The module page: front matter with Module Name and no external help file
+            if ($text -match '(?m)^Module Name:' -and $text -notmatch '(?m)^external help file:') {
+              $text = $text -replace '(?m)^Module Guid: \{\{[^}\r\n]*\}\}', ('Module Guid: ' + $manifest.GUID)
+              $text = $text -replace '(?m)^Help Version: \{\{[^}\r\n]*\}\}', ('Help Version: ' + $manifest.ModuleVersion)
+              $text = $text -replace '(?m)^Locale: \{\{[^}\r\n]*\}\}', ('Locale: ' + $env:DOCS_LOCALE)
+              # Without updatable help the link stays empty, as Update-MarkdownHelpModule writes it on the next run
+              $text = $text -replace '(?m)^Download Help Link: \{\{[^}\r\n]*\}\}', ('Download Help Link: ' + [string]$manifest.HelpInfoURI)
+              $description = [string]$manifest.Description
+              $text = [regex]::Replace($text, '(?m)^(## Description\r?\n)\{\{ Fill in the Description \}\}', {
+                param($m) $m.Groups[1].Value + $description
+              })
+              $text = [regex]::Replace($text, '(?m)^(### \[(?<name>[^\]]+)\]\([^)]*\)\r?\n)\{\{ Fill in the Description \}\}', {
+                param($m) $m.Groups[1].Value + [string](Get-Help -Name $m.Groups['name'].Value).Synopsis
+              })
+            }
+
+            if ($text -ne $orig) {
+              Set-Content -LiteralPath $path -Value $text -Encoding UTF8 -NoNewline
+              $changed++
+            }
+            $left = [regex]::Matches($text, '\{\{[^}\r\n]*\}\}') | ForEach-Object Value | Select-Object -Unique
+            if ($left) {
+              Write-Host "::warning file=$path::Placeholder left in $($_.Name): $($left -join ', ')"
+            }
+          }
+          Write-Host "Tidied $changed markdown file(s)." -ForegroundColor Green
+
+
       - name: Generate External Help
         shell: pwsh
         env:
